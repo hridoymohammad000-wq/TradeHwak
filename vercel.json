@@ -1,0 +1,12 @@
+{
+  "framework": "vite",
+  "installCommand": "pnpm --filter @workspace/crypto-dashboard... install --frozen-lockfile",
+  "buildCommand": "pnpm --filter @workspace/crypto-dashboard build",
+  "outputDirectory": "artifacts/crypto-dashboard/dist/public",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+- [Python on Replit Nix](python-nix-venv.md) — Nix blocks system pip; always use a `.venv/` virtualenv inside the artifact directory.
+- [Replit proxy relative URL fix](replit-relative-api-url.md) — `new URL()` needs absolute base; convert `/api` to `window.location.origin + '/api'` at runtime in the API client.
+- [FastAPI under path prefix](fastapi-path-prefix.md) — Mount router with `prefix="/api"` so Replit's path proxy routes correctly without URL rewriting.

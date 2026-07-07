@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: crypto-bot-api
+    runtime: python
+    rootDir: artifacts/api-server
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DEFAULT_SYSTEM_MODE
+        value: demo
+      - key: DEFAULT_STRATEGY_MODE
+        value: scalping
+      - key: BYBIT_ENV
+        value: demo
+      - key: BYBIT_BASE_URL
+        value: https://api-demo.bybit.com
+      - key: BYBIT_DEMO_API_KEY
+        sync: false
+      - key: BYBIT_DEMO_API_SECRET
+        sync: false
