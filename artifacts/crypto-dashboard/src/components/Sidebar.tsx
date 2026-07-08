@@ -34,6 +34,7 @@ export function Sidebar({ activePage, onPageChange, isOpen, onClose }: SidebarPr
     { page: ActivePage.ACTIVE_TRADES, label: 'Active Trades', icon: Activity },
     { page: ActivePage.JOURNAL, label: 'Operator Journal', icon: BookOpen },
     { page: ActivePage.SETTINGS, label: 'Control Center', icon: Settings },
+    { page: ActivePage.PERFORMANCE, label: 'Performance & Strategy', icon: Activity },
   ];
 
   return (

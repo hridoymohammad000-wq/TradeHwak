@@ -6,6 +6,7 @@ export enum ActivePage {
   ACTIVE_TRADES = 'active_trades',
   JOURNAL = 'journal',
   SETTINGS = 'settings',
+  PERFORMANCE = 'performance',
 }
 
 export type { RuntimeMode, TradingMode } from './api/types';
