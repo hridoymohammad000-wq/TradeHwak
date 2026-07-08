@@ -1,0 +1,64 @@
+{
+  "settings": {
+    "system_mode": "demo",
+    "active_strategy_mode": "scalping",
+    "scalping_engine_enabled": false,
+    "intraday_engine_enabled": false,
+    "auto_trade_enabled": false,
+    "emergency_stop": false,
+    "daily_max_loss": 0.0,
+    "daily_max_trades": 0,
+    "risk_per_trade_pct": 0.0,
+    "max_open_positions": 0,
+    "scalping": {
+      "max_risk_per_trade_pct": 0.0,
+      "max_trades_per_day": 0,
+      "max_daily_loss": 0.0,
+      "max_concurrent_trades": 0,
+      "session_start_utc": null,
+      "session_end_utc": null
+    },
+    "intraday": {
+      "max_risk_per_trade_pct": 0.0,
+      "max_trades_per_day": 0,
+      "max_daily_loss": 0.0,
+      "max_concurrent_trades": 0,
+      "session_start_utc": null,
+      "session_end_utc": null
+    },
+    "allowed_signal_grades": [
+      "A+",
+      "A"
+    ],
+    "notifications": {
+      "telegram": false,
+      "email": false,
+      "chime": true,
+      "toast": true
+    }
+  },
+  "trades": {
+    "trade_day": "2026-07-07",
+    "daily_trade_count": 0,
+    "executed_signal_ids": [],
+    "active_trades": [],
+    "closed_trades": []
+  },
+  "workflow": {
+    "scanner_status": "idle",
+    "signal_status": "idle",
+    "execution_status": "idle",
+    "last_reject_reason": "Auto trade is off.",
+    "candidate_signal": null,
+    "last_order": null,
+    "last_cycle_at": "2026-07-07T21:53:02.989369+00:00"
+  },
+  "events": [
+    {
+      "event_type": "backend_boot",
+      "message": "Runtime state initialized using local storage.",
+      "created_at": "2026-07-07 21:45:12 UTC"
+    }
+  ],
+  "updated_at": "2026-07-07 21:53:02 UTC"
+}
