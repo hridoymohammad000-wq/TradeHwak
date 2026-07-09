@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from app.core.enums import TradingMode
 from app.db.repository import PersistenceRepository
 from app.schemas.workflow import (
     WorkflowOrderSnapshot,
@@ -14,6 +13,7 @@ from app.schemas.workflow import (
 from app.services.bybit_service import BybitService
 from app.services.manual_trade_service import ManualTradeService
 from app.services.settings_service import SettingsService
+from app.services.signal_registry import SignalRegistry
 from app.services.strategy_service import StrategyService
 from app.services.trade_service import TradeService
 
@@ -29,6 +29,7 @@ class AutoTradeService:
         strategy_service: StrategyService,
         manual_trade_service: ManualTradeService,
         trade_service: TradeService,
+        signal_registry: SignalRegistry,
         repository: PersistenceRepository | None = None,
     ) -> None:
         self._settings_service = settings_service
@@ -36,6 +37,7 @@ class AutoTradeService:
         self._strategy_service = strategy_service
         self._manual_trade_service = manual_trade_service
         self._trade_service = trade_service
+        self._signal_registry = signal_registry
         self._repository = repository
         self._last_scanner_status = "idle"
         self._last_signal_status = "idle"
@@ -89,35 +91,27 @@ class AutoTradeService:
             timeframe = self._strategy_service.default_timeframe(selected_mode)
             symbols = self._strategy_service.default_symbols(selected_mode)
             self._last_scanner_status = f"scanned_{len(symbols)}_symbols"
+            evaluated_signals = []
 
             for symbol in symbols:
-                if opened >= capacity:
-                    break
-                if self._trade_service.has_open_trade_for_symbol(symbol):
-                    self._last_reject_reason = f"{symbol} already has an open trade."
-                    continue
                 try:
                     signal = self._strategy_service.evaluate_symbol(
                         symbol=symbol,
                         mode=selected_mode,
                         timeframe=timeframe,
                     )
-                except HTTPException:
+                except HTTPException as exc:
+                    self._last_reject_reason = self._format_http_detail(exc.detail)
                     continue
 
-                if signal is None or signal.grade not in settings.allowed_signal_grades:
-                    if signal is not None:
-                        self._last_candidate_signal = WorkflowSignalSnapshot(
-                            symbol=signal.symbol,
-                            direction=signal.direction.value,
-                            grade=signal.grade.value,
-                            timeframe=signal.timeframe.value,
-                            reason=signal.reason,
-                        )
-                        self._last_signal_status = "filtered"
-                        self._last_reject_reason = (
-                            f"{signal.grade.value} is not allowed by current risk profile."
-                        )
+                if signal is None:
+                    continue
+                evaluated_signals.append(signal)
+
+                if opened >= capacity:
+                    continue
+                if self._trade_service.has_open_trade_for_symbol(symbol):
+                    self._last_reject_reason = f"{symbol} already has an open trade."
                     continue
 
                 self._last_candidate_signal = WorkflowSignalSnapshot(
@@ -127,6 +121,14 @@ class AutoTradeService:
                     timeframe=signal.timeframe.value,
                     reason=signal.reason,
                 )
+
+                if signal.grade not in settings.allowed_signal_grades:
+                    self._last_signal_status = "filtered"
+                    self._last_reject_reason = (
+                        f"{signal.grade.value} is not allowed by current risk profile."
+                    )
+                    continue
+
                 self._last_signal_status = "candidate_ready"
                 signal_id = self._trade_service.build_signal_id(
                     symbol=signal.symbol,
@@ -147,13 +149,14 @@ class AutoTradeService:
                         timeframe=signal.timeframe,
                         signal_id=signal_id,
                     )
-                except HTTPException:
+                except HTTPException as exc:
                     self._last_execution_status = "rejected"
-                    self._last_reject_reason = "Exchange rejected the candidate order."
+                    self._last_reject_reason = self._format_http_detail(exc.detail)
                     continue
                 except Exception as exc:
                     self._last_execution_status = "rejected"
                     self._last_reject_reason = f"Unexpected execution error: {exc}"
+                    logger.exception("Unexpected auto-trade execution error")
                     continue
 
                 self._last_order = WorkflowOrderSnapshot(
@@ -166,11 +169,19 @@ class AutoTradeService:
                 self._last_execution_status = "submitted"
                 opened += 1
 
-            if opened == 0 and self._last_signal_status == "idle":
+            self._signal_registry.replace(
+                selected_mode,
+                evaluated_signals,
+                source="auto_trade_cycle",
+            )
+
+            if not evaluated_signals:
                 self._last_signal_status = "no_signal"
                 self._last_reject_reason = (
                     self._last_reject_reason or "Scanner found no executable signal."
                 )
+            elif opened == 0 and self._last_signal_status == "idle":
+                self._last_signal_status = "filtered"
 
             return {
                 "status": "executed" if opened else "no_match",
@@ -211,21 +222,28 @@ class AutoTradeService:
             ),
         )
 
+    @staticmethod
+    def _format_http_detail(detail) -> str:
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, dict):
+            code = detail.get("code") or detail.get("retCode")
+            message = detail.get("message") or detail.get("retMsg") or str(detail)
+            return f"Bybit code {code}: {message}" if code is not None else message
+        return str(detail)
+
     def _restore_state(self) -> None:
         if self._repository is None:
             return
-
         stored = self._repository.load_workflow_state()
         if not stored:
             return
-
         try:
             self._last_scanner_status = str(stored.get("scanner_status") or "idle")
             self._last_signal_status = str(stored.get("signal_status") or "idle")
             self._last_execution_status = str(stored.get("execution_status") or "idle")
             self._last_reject_reason = stored.get("last_reject_reason")
             self._last_cycle_at = stored.get("last_cycle_at")
-
             candidate = stored.get("candidate_signal")
             order = stored.get("last_order")
             self._last_candidate_signal = (
@@ -240,7 +258,6 @@ class AutoTradeService:
     def _persist_state(self) -> None:
         if self._repository is None:
             return
-
         self._repository.save_workflow_state(
             {
                 "scanner_status": self._last_scanner_status,
