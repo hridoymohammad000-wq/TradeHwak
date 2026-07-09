@@ -106,7 +106,7 @@ class StepOneFoundationTests(unittest.TestCase):
                     "symbol": "BTCUSDT",
                     "direction": "BUY",
                     "grade": "A+",
-                    "timeframe": "5m",
+                    "timeframe": "M5",
                     "reason": "test",
                 },
                 "last_order": None,
@@ -121,6 +121,7 @@ class StepOneFoundationTests(unittest.TestCase):
             strategy_service=object(),
             manual_trade_service=object(),
             trade_service=object(),
+            signal_registry=object(),
             repository=repository,
         )
 
