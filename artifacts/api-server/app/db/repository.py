@@ -107,6 +107,20 @@ class PersistenceRepository:
             (signal_id, trade_day),
         )
 
+    def load_workflow_state(self) -> dict[str, Any] | None:
+        row = self._fetchone("SELECT state FROM workflow_state WHERE id = 1")
+        return self._json_value(row.get("state")) if row else None
+
+    def save_workflow_state(self, state: dict[str, Any]) -> None:
+        self._execute(
+            """
+            INSERT INTO workflow_state (id, state, updated_at)
+            VALUES (1, %s::jsonb, now())
+            ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+            """,
+            (self._json(state),),
+        )
+
     def append_log(self, table: str, event_type: str, payload: dict[str, Any]) -> None:
         allowed = {"scan_logs", "signal_logs", "execution_logs"}
         if table not in allowed:
