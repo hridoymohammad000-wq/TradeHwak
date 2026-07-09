@@ -13,6 +13,8 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
+      - key: TRADEHAWK_ACCESS_TOKEN
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: DEFAULT_SYSTEM_MODE
