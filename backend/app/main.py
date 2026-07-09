@@ -25,7 +25,7 @@ async def _auto_trade_loop() -> None:
         try:
             auto_trade_service.run_cycle()
         except Exception:
-            pass
+            logger.exception("Auto-trade background cycle failed.")
         await asyncio.sleep(15)
 
 

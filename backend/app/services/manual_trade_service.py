@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 
 from fastapi import HTTPException, status
@@ -7,6 +8,9 @@ from app.schemas.trades import ManualTradeData, ManualTradeRequest, ManualTradeR
 from app.services.bybit_service import BybitService
 from app.services.settings_service import SettingsService
 from app.services.trade_service import TradeService
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class ManualTradeService:
@@ -20,7 +24,11 @@ class ManualTradeService:
         self._bybit_service = bybit_service
         self._trade_service = trade_service
 
-    def execute_manual_trade(self, payload: ManualTradeRequest) -> ManualTradeResponse:
+    def execute_manual_trade(
+        self,
+        payload: ManualTradeRequest,
+        signal_id: str | None = None,
+    ) -> ManualTradeResponse:
         settings_state = self._settings_service.get_settings_state()
         if settings_state.system_mode != "demo":
             raise HTTPException(
@@ -62,6 +70,7 @@ class ManualTradeService:
         )
 
         stop_loss, take_profit = self._resolve_protection_prices(
+            symbol=normalized_symbol,
             direction=payload.direction,
             mode=payload.mode,
             timeframe=payload.timeframe,
@@ -149,6 +158,17 @@ class ManualTradeService:
             daily_max_loss=settings_state.daily_max_loss,
         )
 
+        logger.info(
+            "Trade protection submitted symbol=%s mode=%s entry=%s sl=%s tp=%s risk_pct=%.4f rr=%.2f",
+            normalized_symbol,
+            payload.mode.value,
+            market_price,
+            rounded_stop,
+            rounded_take,
+            float(risk_pct_of_entry),
+            float(risk_reward),
+        )
+
         response = ManualTradeResponse(
             message="Manual Bybit demo trade submitted successfully.",
             data=ManualTradeData(
@@ -180,6 +200,7 @@ class ManualTradeService:
             risk_distance=float(risk_distance),
             risk_pct_of_entry=float(risk_pct_of_entry),
             risk_reward=float(risk_reward),
+            signal_id=signal_id,
             order_id=response.data.order_id,
             qty=response.data.qty,
         )
@@ -206,6 +227,7 @@ class ManualTradeService:
 
     def _resolve_protection_prices(
         self,
+        symbol: str,
         direction: Direction,
         mode: TradingMode,
         timeframe: Timeframe | None,
@@ -213,27 +235,94 @@ class ManualTradeService:
         stop_loss: float | None,
         take_profit: float | None,
     ) -> tuple[Decimal, Decimal]:
-        timeframe_risk_map: dict[Timeframe, Decimal] = {
-            Timeframe.M1: Decimal("0.0035"),
-            Timeframe.M5: Decimal("0.0045"),
-            Timeframe.M15: Decimal("0.0075"),
-            Timeframe.H1: Decimal("0.0125"),
-        }
-        default_risk_pct = Decimal("0.0045") if mode == TradingMode.SCALPING else Decimal("0.0085")
-        risk_pct = timeframe_risk_map.get(timeframe, default_risk_pct)
+        if stop_loss is not None and take_profit is not None:
+            return self._positive_decimal(stop_loss, "Stop loss is invalid."), self._positive_decimal(
+                take_profit, "Take profit is invalid."
+            )
 
-        if stop_loss is None or take_profit is None:
+        interval_map: dict[Timeframe, str] = {
+            Timeframe.M1: "1",
+            Timeframe.M5: "5",
+            Timeframe.M15: "15",
+            Timeframe.H1: "60",
+        }
+        interval = interval_map.get(timeframe, "5" if mode == TradingMode.SCALPING else "15")
+        try:
+            candles = self._load_ohlc(symbol, interval, limit=80)
+            atr = self._atr(candles, 14)
+            if atr is None or len(candles) < 20:
+                raise ValueError("insufficient ATR candles")
+            recent = candles[-12:]
+            swing_low = min(item[2] for item in recent)
+            swing_high = max(item[1] for item in recent)
+            atr_buffer = atr * Decimal("0.35")
+            minimum_distance = max(market_price * Decimal("0.0035"), atr * Decimal("0.80"))
+            maximum_pct = Decimal("0.025") if mode == TradingMode.SCALPING else Decimal("0.040")
+            maximum_distance = market_price * maximum_pct
+
             if direction == Direction.BUY:
-                generated_sl = market_price * (Decimal("1") - risk_pct)
-                generated_tp = market_price * (Decimal("1") + (risk_pct * Decimal("2")))
+                structural_stop = swing_low - atr_buffer
+                distance = market_price - structural_stop
             else:
-                generated_sl = market_price * (Decimal("1") + risk_pct)
-                generated_tp = market_price * (Decimal("1") - (risk_pct * Decimal("2")))
+                structural_stop = swing_high + atr_buffer
+                distance = structural_stop - market_price
+
+            distance = max(minimum_distance, min(distance, maximum_distance))
+            generated_sl = market_price - distance if direction == Direction.BUY else market_price + distance
+            generated_tp = market_price + (distance * Decimal("2")) if direction == Direction.BUY else market_price - (distance * Decimal("2"))
+            logger.info(
+                "ATR swing SL symbol=%s mode=%s interval=%s entry=%s atr=%s swing=%s sl=%s distance_pct=%.4f",
+                symbol,
+                mode.value,
+                interval,
+                market_price,
+                atr,
+                swing_low if direction == Direction.BUY else swing_high,
+                generated_sl,
+                float((distance / market_price) * Decimal("100")),
+            )
+            return generated_sl, generated_tp
+        except Exception as exc:
+            fallback_pct = Decimal("0.0065") if mode == TradingMode.SCALPING else Decimal("0.0100")
+            logger.warning("ATR swing SL fallback symbol=%s reason=%s", symbol, exc)
+            if direction == Direction.BUY:
+                generated_sl = market_price * (Decimal("1") - fallback_pct)
+                generated_tp = market_price * (Decimal("1") + fallback_pct * Decimal("2"))
+            else:
+                generated_sl = market_price * (Decimal("1") + fallback_pct)
+                generated_tp = market_price * (Decimal("1") - fallback_pct * Decimal("2"))
             return generated_sl, generated_tp
 
-        return self._positive_decimal(stop_loss, "Stop loss is invalid."), self._positive_decimal(
-            take_profit, "Take profit is invalid."
-        )
+    def _load_ohlc(self, symbol: str, interval: str, limit: int) -> list[tuple[Decimal, Decimal, Decimal, Decimal]]:
+        rows = list(reversed(self._bybit_service.get_closed_klines(symbol, interval, limit=limit)))
+        candles: list[tuple[Decimal, Decimal, Decimal, Decimal]] = []
+        for row in rows:
+            try:
+                candles.append(
+                    (
+                        Decimal(str(row[1])),
+                        Decimal(str(row[2])),
+                        Decimal(str(row[3])),
+                        Decimal(str(row[4])),
+                    )
+                )
+            except (InvalidOperation, TypeError, ValueError, IndexError):
+                continue
+        return candles
+
+    @staticmethod
+    def _atr(candles: list[tuple[Decimal, Decimal, Decimal, Decimal]], period: int) -> Decimal | None:
+        if len(candles) <= period:
+            return None
+        ranges: list[Decimal] = []
+        for index in range(1, len(candles)):
+            _, high, low, _ = candles[index]
+            previous_close = candles[index - 1][3]
+            ranges.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+        atr = sum(ranges[:period], Decimal("0")) / Decimal(period)
+        for value in ranges[period:]:
+            atr = ((atr * Decimal(period - 1)) + value) / Decimal(period)
+        return atr
 
     @staticmethod
     def _positive_decimal(value: str | float | int | Decimal, message: str) -> Decimal:
@@ -333,15 +422,9 @@ class ManualTradeService:
                 detail="Set daily max trades above 0 before sending manual orders.",
             )
         if self._trade_service.get_open_trade_count() >= max_open_positions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Max active slots reached.",
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Max active slots reached.")
         if self._trade_service.get_daily_trade_count() >= daily_max_trades:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Daily max trades limit reached.",
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Daily max trades limit reached.")
         if self._trade_service.has_open_trade_for_symbol(symbol):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
