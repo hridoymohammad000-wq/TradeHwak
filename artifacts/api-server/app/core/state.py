@@ -8,6 +8,7 @@ from app.services.engine_service import EngineService
 from app.services.manual_trade_service import ManualTradeService
 from app.services.scanner_service import ScannerService
 from app.services.settings_service import SettingsService
+from app.services.signal_registry import SignalRegistry
 from app.services.signals_service import SignalsService
 from app.services.strategy_service import StrategyService
 from app.services.system_service import SystemService
@@ -19,15 +20,21 @@ settings_service = SettingsService(repository=persistence_repository)
 system_service = SystemService(settings_service=settings_service)
 bybit_service = BybitService()
 strategy_service = StrategyService(bybit_service=bybit_service)
+signal_registry = SignalRegistry(repository=persistence_repository)
 scanner_service = ScannerService(
     settings_service=settings_service,
     strategy_service=strategy_service,
+    signal_registry=signal_registry,
 )
 signals_service = SignalsService(
     settings_service=settings_service,
     strategy_service=strategy_service,
+    signal_registry=signal_registry,
 )
-trade_service = TradeService(settings_service=settings_service, repository=persistence_repository)
+trade_service = TradeService(
+    settings_service=settings_service,
+    repository=persistence_repository,
+)
 manual_trade_service = ManualTradeService(
     settings_service=settings_service,
     bybit_service=bybit_service,
@@ -40,6 +47,7 @@ auto_trade_service = AutoTradeService(
     strategy_service=strategy_service,
     manual_trade_service=manual_trade_service,
     trade_service=trade_service,
+    signal_registry=signal_registry,
     repository=persistence_repository,
 )
 dashboard_service = DashboardService(
