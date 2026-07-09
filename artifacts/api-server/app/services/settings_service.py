@@ -1,9 +1,11 @@
+import logging
+
 from fastapi import HTTPException, status
 
 from app.core.config import get_app_config
 from app.core.enums import RuntimeMode, TradingMode
-from app.models.settings import TradingSettingsModel
 from app.db.repository import PersistenceRepository
+from app.models.settings import TradingSettingsModel
 from app.schemas.mode import ModeData, ModeResponse
 from app.schemas.settings import (
     EngineControlSection,
@@ -16,6 +18,9 @@ from app.schemas.settings import (
     StrategySettingsSection,
     SystemSettingsSection,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsService:
@@ -31,10 +36,24 @@ class SettingsService:
         if self._repository is None:
             return
         stored = self._repository.load_settings()
-        if stored:
-            self._settings = TradingSettingsModel.model_validate(stored)
-        else:
+        if not stored:
             self._persist()
+            return
+
+        candidate = TradingSettingsModel.model_validate(stored)
+        if candidate.auto_trade_enabled:
+            reason = self._execution_block_reason(candidate)
+            if reason:
+                logger.warning(
+                    "Persisted auto-trade state was disabled during startup: %s",
+                    reason,
+                )
+                candidate = candidate.model_copy(update={"auto_trade_enabled": False})
+                self._settings = candidate
+                self._persist()
+                return
+
+        self._settings = candidate
 
     def _persist(self) -> None:
         if self._repository is not None:
@@ -133,10 +152,59 @@ class SettingsService:
         self._persist()
         return self.get_settings_state()
 
-    @staticmethod
-    def _validate_control_state(settings: TradingSettingsModel) -> None:
+    def get_execution_readiness(
+        self,
+        controls: dict[str, bool] | None = None,
+    ) -> tuple[bool, str | None]:
+        candidate_data = self._settings.model_dump()
+        if controls:
+            candidate_data.update(controls)
+        candidate = TradingSettingsModel.model_validate(candidate_data)
+        reason = self._execution_block_reason(candidate)
+        return reason is None, reason
+
+    def validate_execution_controls(self, controls: dict[str, bool]) -> None:
+        candidate_data = self._settings.model_dump()
+        candidate_data.update(controls)
+        candidate = TradingSettingsModel.model_validate(candidate_data)
+        self._validate_control_state(candidate)
+
+    @classmethod
+    def _validate_control_state(cls, settings: TradingSettingsModel) -> None:
         if settings.emergency_stop and settings.auto_trade_enabled:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Auto trade cannot be enabled while emergency stop is active.",
             )
+
+        if settings.auto_trade_enabled:
+            reason = cls._execution_block_reason(settings)
+            if reason:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=reason,
+                )
+
+    @staticmethod
+    def _execution_block_reason(settings: TradingSettingsModel) -> str | None:
+        if settings.emergency_stop:
+            return "Emergency stop is active."
+        if not settings.auto_trade_enabled:
+            return "Auto trade is off."
+        if settings.system_mode != RuntimeMode.DEMO:
+            return "System mode must be demo before auto trade can run."
+
+        selected_engine_enabled = (
+            settings.scalping_engine_enabled
+            if settings.active_strategy_mode == TradingMode.SCALPING
+            else settings.intraday_engine_enabled
+        )
+        if not selected_engine_enabled:
+            return f"{settings.active_strategy_mode.value.title()} engine is disabled."
+        if settings.risk_per_trade_pct <= 0:
+            return "Set risk per trade above 0% before enabling auto trade."
+        if settings.max_open_positions <= 0:
+            return "Set max active slots above 0 before enabling auto trade."
+        if settings.daily_max_trades <= 0:
+            return "Set daily max trades above 0 before enabling auto trade."
+        return None
