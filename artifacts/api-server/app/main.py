@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
 from app.core.config import get_app_config
 from app.core.exceptions import register_exception_handlers
@@ -56,11 +57,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 register_exception_handlers(app)
-# Render health checks use /health; the existing frontend API remains under /api.
+# Render health checks and the existing frontend auth calls remain available at root.
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(api_router, prefix="/api")
