@@ -1,5 +1,3 @@
-from fastapi import HTTPException
-
 from app.core.enums import SignalGrade, Timeframe, TradingMode
 from app.schemas.signals import SignalFilters, SignalItem, SignalsData, SignalsResponse
 from app.services.settings_service import SettingsService
@@ -32,34 +30,12 @@ class SignalsService:
         normalized_symbol = symbol.strip().upper() if symbol else None
         settings_state = self._settings_service.get_settings_state()
 
+        # GET /signals must remain a fast read-only endpoint. Signal generation belongs
+        # to the scanner/background workflow; doing live Bybit evaluation here can
+        # exceed the frontend request timeout and incorrectly show "Backend unavailable".
         evaluated = self._signal_registry.get(selected_mode)
         if normalized_symbol:
             evaluated = [item for item in evaluated if item.symbol == normalized_symbol]
-
-        if not evaluated:
-            symbols = (
-                [normalized_symbol]
-                if normalized_symbol
-                else self._strategy_service.default_symbols(selected_mode)
-            )
-            fresh = []
-            for item_symbol in symbols:
-                try:
-                    signal_item = self._strategy_service.evaluate_symbol(
-                        symbol=item_symbol,
-                        mode=selected_mode,
-                        timeframe=timeframe,
-                    )
-                except HTTPException:
-                    continue
-                if signal_item is not None:
-                    fresh.append(signal_item)
-            evaluated = fresh
-            self._signal_registry.replace(
-                selected_mode,
-                fresh,
-                source="signals_refresh",
-            )
 
         filtered_signals: list[SignalItem] = []
         fallback_signals: list[SignalItem] = []
