@@ -56,10 +56,17 @@ def _read_port() -> int:
     return port
 
 
+def _read_bool(name: str, default: bool = False) -> bool:
+    raw_value = getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class AppConfig(BaseModel):
-    app_name: str = "Crypto Scalping Trader Backend"
-    version: str = "0.2.0"
-    phase: str = "foundation"
+    app_name: str = "TradeHawk Backend"
+    version: str = "0.3.0"
+    phase: str = "operational"
     execution_enabled: bool = False
     app_env: str = "development"
     app_host: str = "127.0.0.1"
@@ -78,7 +85,10 @@ class AppConfig(BaseModel):
 @lru_cache(maxsize=1)
 def get_app_config() -> AppConfig:
     return AppConfig(
-        app_name=getenv("APP_NAME", "Crypto Scalping Trader Backend"),
+        app_name=getenv("APP_NAME", "TradeHawk Backend"),
+        version=getenv("APP_VERSION", "0.3.0"),
+        phase=getenv("APP_PHASE", "operational"),
+        execution_enabled=_read_bool("EXECUTION_ENABLED", False),
         app_env=getenv("APP_ENV", "development"),
         app_host=getenv("APP_HOST", "127.0.0.1"),
         app_port=_read_port(),
