@@ -26,6 +26,8 @@ class WorkflowStatusData(BaseModel):
     scanner_status: str
     signal_status: str
     execution_status: str
+    execution_ready: bool = False
+    execution_block_reason: str | None = None
     auto_trade_enabled: bool
     bybit_connection_code: str
     active_trade_count: int
