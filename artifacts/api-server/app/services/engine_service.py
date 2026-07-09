@@ -51,34 +51,7 @@ class EngineService:
         )
 
     def _validate_auto_trade_gate(self, candidate_state: dict[str, bool]) -> None:
-        settings_state = self._settings_service.get_settings_state()
-
-        if not (
-            candidate_state["scalping_engine_enabled"]
-            or candidate_state["intraday_engine_enabled"]
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Enable at least one strategy engine before turning on auto trade.",
-            )
-
-        if settings_state.risk_per_trade_pct <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Set risk per trade above 0% before enabling auto trade.",
-            )
-
-        if settings_state.max_open_positions <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Set max active slots above 0 before enabling auto trade.",
-            )
-
-        if settings_state.daily_max_trades <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Set daily max trades above 0 before enabling auto trade.",
-            )
+        self._settings_service.validate_execution_controls(candidate_state)
 
         bybit_status = self._bybit_service.get_connection_status().data
         if bybit_status.code != "CONNECTED":
