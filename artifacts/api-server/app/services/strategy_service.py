@@ -131,7 +131,8 @@ class StrategyService:
         )
 
     def _load_candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
-        rows = list(reversed(self._bybit_service.get_closed_klines(symbol, interval, limit=limit)))
+        payload = self._bybit_service._get_closed_klines(symbol, interval, limit=limit)
+        rows = list(reversed(payload.get("result", {}).get("list", [])))
         result = []
         for row in rows:
             try:
