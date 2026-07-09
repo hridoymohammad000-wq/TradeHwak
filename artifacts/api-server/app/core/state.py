@@ -16,7 +16,7 @@ from app.services.trade_service import TradeService
 
 persistence_repository = PersistenceRepository(get_app_config().database_url)
 settings_service = SettingsService(repository=persistence_repository)
-system_service = SystemService()
+system_service = SystemService(settings_service=settings_service)
 bybit_service = BybitService()
 strategy_service = StrategyService(bybit_service=bybit_service)
 scanner_service = ScannerService(
@@ -40,6 +40,7 @@ auto_trade_service = AutoTradeService(
     strategy_service=strategy_service,
     manual_trade_service=manual_trade_service,
     trade_service=trade_service,
+    repository=persistence_repository,
 )
 dashboard_service = DashboardService(
     settings_service=settings_service,
