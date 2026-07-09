@@ -1,13 +1,17 @@
+import logging
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 
 from fastapi import HTTPException, status
 
 from app.core.enums import Direction, Timeframe, TradingMode
+from app.db.repository import PersistenceRepository
 from app.schemas.trades import ManualTradeData, ManualTradeRequest, ManualTradeResponse
 from app.services.bybit_service import BybitService
 from app.services.settings_service import SettingsService
 from app.services.trade_service import TradeService
-from app.db.repository import PersistenceRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class ManualTradeService:
@@ -23,7 +27,11 @@ class ManualTradeService:
         self._trade_service = trade_service
         self._repository = repository
 
-    def execute_manual_trade(self, payload: ManualTradeRequest) -> ManualTradeResponse:
+    def execute_manual_trade(
+        self,
+        payload: ManualTradeRequest,
+        signal_id: str | None = None,
+    ) -> ManualTradeResponse:
         settings_state = self._settings_service.get_settings_state()
         if settings_state.system_mode != "demo":
             raise HTTPException(
@@ -45,7 +53,7 @@ class ManualTradeService:
         if connection.code != "CONNECTED":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Bybit Demo must be connected before sending manual orders.",
+                detail=f"Bybit Demo is not ready: {connection.detail}",
             )
 
         symbol_meta = self._bybit_service.get_validated_symbol(payload.symbol)
@@ -89,11 +97,20 @@ class ManualTradeService:
             )
 
         available_balance = wallet["available"]
-        risk_amount = available_balance * (Decimal(str(settings_state.risk_per_trade_pct)) / Decimal("100"))
-        qty = self._round_to_step(risk_amount / risk_distance, constraints["qtyStep"], ROUND_DOWN)
-        max_cash_qty = self._round_to_step(available_balance / market_price, constraints["qtyStep"], ROUND_DOWN)
-        if max_cash_qty > 0 and qty > max_cash_qty:
-            qty = max_cash_qty
+        if available_balance <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bybit Demo available USDT balance is zero.",
+            )
+
+        risk_amount = available_balance * (
+            Decimal(str(settings_state.risk_per_trade_pct)) / Decimal("100")
+        )
+        qty = self._round_to_step(
+            risk_amount / risk_distance,
+            constraints["qtyStep"],
+            ROUND_DOWN,
+        )
 
         if qty <= 0:
             raise HTTPException(
@@ -103,38 +120,104 @@ class ManualTradeService:
         if qty < constraints["minQty"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Calculated quantity {qty} is below the minimum order size.",
+                detail=(
+                    f"Calculated quantity {qty} is below Bybit minimum "
+                    f"{constraints['minQty']} for {symbol_meta['symbol']}."
+                ),
             )
         if constraints["maxQty"] > 0 and qty > constraints["maxQty"]:
+            qty = self._round_to_step(
+                constraints["maxQty"], constraints["qtyStep"], ROUND_DOWN
+            )
+
+        notional = qty * market_price
+        if constraints["minNotional"] > 0 and notional < constraints["minNotional"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Calculated quantity {qty} exceeds the maximum order size.",
+                detail=(
+                    f"Calculated order value {notional} USDT is below Bybit minimum "
+                    f"{constraints['minNotional']} USDT for {symbol_meta['symbol']}."
+                ),
+            )
+
+        planned_risk_usdt = qty * risk_distance
+        if planned_risk_usdt > risk_amount:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Calculated risk {planned_risk_usdt} USDT exceeds the configured "
+                    f"risk budget {risk_amount} USDT."
+                ),
+            )
+
+        risk_reward = self._risk_reward(
+            payload.direction,
+            market_price,
+            rounded_stop,
+            rounded_take,
+        )
+        if risk_reward < Decimal("2"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Risk-reward {risk_reward:.2f} is below the required minimum 2.00.",
             )
 
         side = "Buy" if payload.direction == Direction.BUY else "Sell"
         qty_string = self._format_decimal(qty, constraints["qtyStep"])
-        rounded_stop_string = self._format_decimal(rounded_stop, constraints["tickSize"])
-        rounded_take_string = self._format_decimal(rounded_take, constraints["tickSize"])
-
-        order = self._bybit_service.create_private_order(
-            {
-                "category": "linear",
-                "symbol": symbol_meta["symbol"],
-                "side": side,
-                "orderType": "Market",
-                "qty": qty_string,
-                "timeInForce": "IOC",
-                "positionIdx": 0,
-                "stopLoss": rounded_stop_string,
-                "takeProfit": rounded_take_string,
-                "slTriggerBy": "MarkPrice",
-                "tpTriggerBy": "MarkPrice",
-            }
+        rounded_stop_string = self._format_decimal(
+            rounded_stop, constraints["tickSize"]
         )
+        rounded_take_string = self._format_decimal(
+            rounded_take, constraints["tickSize"]
+        )
+        order_payload = {
+            "category": "linear",
+            "symbol": symbol_meta["symbol"],
+            "side": side,
+            "orderType": "Market",
+            "qty": qty_string,
+            "timeInForce": "IOC",
+            "positionIdx": 0,
+            "stopLoss": rounded_stop_string,
+            "takeProfit": rounded_take_string,
+            "slTriggerBy": "MarkPrice",
+            "tpTriggerBy": "MarkPrice",
+        }
+
+        try:
+            order = self._bybit_service.create_private_order(order_payload)
+        except HTTPException as exc:
+            self._log_execution_failure(
+                symbol=symbol_meta["symbol"],
+                side=side,
+                qty=qty_string,
+                market_price=market_price,
+                stop_loss=rounded_stop,
+                take_profit=rounded_take,
+                planned_risk=planned_risk_usdt,
+                detail=exc.detail,
+                status_code=exc.status_code,
+            )
+            raise
+
         order_id = order.get("result", {}).get("orderId")
-        notional = qty * market_price
-        planned_risk_usdt = qty * risk_distance
-        risk_reward = self._risk_reward(payload.direction, market_price, rounded_stop, rounded_take)
+        if not order_id:
+            detail = "Bybit accepted the request but returned no orderId."
+            self._log_execution_failure(
+                symbol=symbol_meta["symbol"],
+                side=side,
+                qty=qty_string,
+                market_price=market_price,
+                stop_loss=rounded_stop,
+                take_profit=rounded_take,
+                planned_risk=planned_risk_usdt,
+                detail=detail,
+                status_code=status.HTTP_502_BAD_GATEWAY,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=detail,
+            )
 
         response = ManualTradeResponse(
             message="Manual Bybit demo trade submitted successfully.",
@@ -162,6 +245,7 @@ class ManualTradeService:
             notional=float(notional),
             planned_risk_usdt=float(planned_risk_usdt),
             risk_reward=float(risk_reward),
+            signal_id=signal_id,
             order_id=response.data.order_id,
             qty=response.data.qty,
         )
@@ -169,7 +253,12 @@ class ManualTradeService:
             self._repository.append_log(
                 "execution_logs",
                 "order_submitted",
-                response.model_dump(mode="json"),
+                {
+                    **response.model_dump(mode="json"),
+                    "signal_id": signal_id,
+                    "planned_risk_usdt": float(planned_risk_usdt),
+                    "risk_budget_usdt": float(risk_amount),
+                },
             )
         return response
 
@@ -182,31 +271,48 @@ class ManualTradeService:
         timeframe: Timeframe | None,
         signal_id: str | None = None,
     ) -> ManualTradeResponse:
-        response = self.execute_manual_trade(
+        return self.execute_manual_trade(
             ManualTradeRequest(
                 symbol=symbol,
                 direction=direction,
                 mode=mode,
                 timeframe=timeframe,
-            )
+            ),
+            signal_id=signal_id,
         )
-        if signal_id:
-            self._trade_service.register_open_trade(
-                symbol=response.data.symbol,
-                mode=mode,
-                direction=direction,
-                entry_price=response.data.market_price,
-                stop_loss=response.data.stop_loss,
-                take_profit=response.data.take_profit,
-                timeframe=timeframe,
-                notional=response.data.notional,
-                planned_risk_usdt=abs(response.data.market_price - response.data.stop_loss) * float(response.data.qty),
-                risk_reward=response.data.risk_reward,
-                signal_id=signal_id,
-                order_id=response.data.order_id,
-                qty=response.data.qty,
+
+    def _log_execution_failure(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: str,
+        market_price: Decimal,
+        stop_loss: Decimal,
+        take_profit: Decimal,
+        planned_risk: Decimal,
+        detail,
+        status_code: int,
+    ) -> None:
+        safe_detail = detail if isinstance(detail, (str, dict, list)) else str(detail)
+        payload = {
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "market_price": float(market_price),
+            "stop_loss": float(stop_loss),
+            "take_profit": float(take_profit),
+            "planned_risk_usdt": float(planned_risk),
+            "status_code": status_code,
+            "detail": safe_detail,
+        }
+        logger.warning("Bybit order rejected: %s", payload)
+        if self._repository is not None:
+            self._repository.append_log(
+                "execution_logs",
+                "order_rejected",
+                payload,
             )
-        return response
 
     def _resolve_protection_prices(
         self,
@@ -223,20 +329,33 @@ class ManualTradeService:
             Timeframe.M15: Decimal("0.0075"),
             Timeframe.H1: Decimal("0.0125"),
         }
-        default_risk_pct = Decimal("0.0045") if mode == TradingMode.SCALPING else Decimal("0.0085")
+        default_risk_pct = (
+            Decimal("0.0045")
+            if mode == TradingMode.SCALPING
+            else Decimal("0.0085")
+        )
         risk_pct = timeframe_risk_map.get(timeframe, default_risk_pct)
 
-        if stop_loss is None or take_profit is None:
+        if stop_loss is None and take_profit is None:
             if direction == Direction.BUY:
-                generated_sl = market_price * (Decimal("1") - risk_pct)
-                generated_tp = market_price * (Decimal("1") + (risk_pct * Decimal("2")))
-            else:
-                generated_sl = market_price * (Decimal("1") + risk_pct)
-                generated_tp = market_price * (Decimal("1") - (risk_pct * Decimal("2")))
-            return generated_sl, generated_tp
+                return (
+                    market_price * (Decimal("1") - risk_pct),
+                    market_price * (Decimal("1") + risk_pct * Decimal("2")),
+                )
+            return (
+                market_price * (Decimal("1") + risk_pct),
+                market_price * (Decimal("1") - risk_pct * Decimal("2")),
+            )
 
-        return self._positive_decimal(stop_loss, "Stop loss is invalid."), self._positive_decimal(
-            take_profit, "Take profit is invalid."
+        if stop_loss is None or take_profit is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provide both stop loss and take profit, or leave both empty.",
+            )
+
+        return (
+            self._positive_decimal(stop_loss, "Stop loss is invalid."),
+            self._positive_decimal(take_profit, "Take profit is invalid."),
         )
 
     @staticmethod
@@ -244,7 +363,9 @@ class ManualTradeService:
         try:
             decimal_value = Decimal(str(value))
         except (InvalidOperation, ValueError, TypeError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message) from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=message
+            ) from exc
         if decimal_value <= 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
         return decimal_value
@@ -258,19 +379,35 @@ class ManualTradeService:
 
     @staticmethod
     def _format_decimal(value: Decimal, step: Decimal) -> str:
-        decimals = abs(step.normalize().as_tuple().exponent) if step.normalize().as_tuple().exponent < 0 else 0
+        normalized = step.normalize()
+        decimals = abs(normalized.as_tuple().exponent) if normalized.as_tuple().exponent < 0 else 0
         return f"{value:.{decimals}f}"
 
     @staticmethod
     def _instrument_constraints(instrument: dict) -> dict[str, Decimal]:
         lot_size = instrument.get("lotSizeFilter", {})
         price_filter = instrument.get("priceFilter", {})
-        return {
-            "tickSize": Decimal(str(price_filter.get("tickSize"))),
-            "qtyStep": Decimal(str(lot_size.get("qtyStep"))),
-            "minQty": Decimal(str(lot_size.get("minOrderQty"))),
-            "maxQty": Decimal(str(lot_size.get("maxOrderQty") or lot_size.get("maxMktOrderQty") or "0")),
-        }
+        try:
+            return {
+                "tickSize": Decimal(str(price_filter.get("tickSize") or "0")),
+                "qtyStep": Decimal(str(lot_size.get("qtyStep") or "0")),
+                "minQty": Decimal(str(lot_size.get("minOrderQty") or "0")),
+                "maxQty": Decimal(
+                    str(
+                        lot_size.get("maxMktOrderQty")
+                        or lot_size.get("maxOrderQty")
+                        or "0"
+                    )
+                ),
+                "minNotional": Decimal(
+                    str(lot_size.get("minNotionalValue") or "0")
+                ),
+            }
+        except InvalidOperation as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Bybit returned invalid instrument constraints.",
+            ) from exc
 
     @staticmethod
     def _rounded_protection_price(
