@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 
 from app.schemas.scanner import ScanData, ScanRequest, ScanResponse, ScanResult
 from app.services.settings_service import SettingsService
+from app.services.signal_registry import SignalRegistry
 from app.services.strategy_service import StrategyService
 
 
@@ -12,9 +13,11 @@ class ScannerService:
         self,
         settings_service: SettingsService,
         strategy_service: StrategyService,
+        signal_registry: SignalRegistry,
     ) -> None:
         self._settings_service = settings_service
         self._strategy_service = strategy_service
+        self._signal_registry = signal_registry
         self._scan_lock = Lock()
 
     def scan(self, payload: ScanRequest | None) -> ScanResponse:
@@ -31,6 +34,7 @@ class ScannerService:
                 or self._settings_service.get_mode_summary().data.active_strategy_mode
             )
             symbols = request.symbols or self._strategy_service.default_symbols(selected_mode)
+            evaluated_signals = []
             filtered_results: list[ScanResult] = []
 
             for symbol in symbols:
@@ -44,6 +48,8 @@ class ScannerService:
                     continue
                 if signal is None:
                     continue
+
+                evaluated_signals.append(signal)
                 if request.direction is not None and signal.direction != request.direction:
                     continue
                 if request.grade is not None and signal.grade != request.grade:
@@ -59,11 +65,17 @@ class ScannerService:
                     )
                 )
 
+            self._signal_registry.replace(
+                selected_mode,
+                evaluated_signals,
+                source="manual_scan",
+            )
             return ScanResponse(
                 message="Scan completed.",
                 data=ScanData(
                     mode=selected_mode,
-                    timeframe=request.timeframe or self._strategy_service.default_timeframe(selected_mode),
+                    timeframe=request.timeframe
+                    or self._strategy_service.default_timeframe(selected_mode),
                     results=filtered_results,
                 ),
             )
