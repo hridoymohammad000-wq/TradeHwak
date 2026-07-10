@@ -1,12 +1,26 @@
+from fastapi import HTTPException
+
 from app.services.bybit_service import BybitService
 
 
 class ManagedBybitService(BybitService):
-    """Ensure managed trades keep only the protective stop on entry.
+    """Apply managed-order protection and explicit symbol leverage."""
 
-    Partial profit-taking is owned by TradeManagementService, so a full-position
-    exchange take-profit must not close the position before staged exits run.
-    """
+    def set_symbol_leverage(self, symbol: str, leverage: int) -> None:
+        if leverage <= 0:
+            raise HTTPException(status_code=400, detail="Leverage must be positive.")
+        payload = {
+            "category": "linear",
+            "symbol": symbol.upper(),
+            "buyLeverage": str(leverage),
+            "sellLeverage": str(leverage),
+        }
+        try:
+            self._private_post("/v5/position/set-leverage", payload)
+        except HTTPException as exc:
+            detail = str(exc.detail)
+            if "110043" not in detail and "not modified" not in detail.lower():
+                raise
 
     def create_private_order(self, payload: dict) -> dict:
         order_payload = dict(payload)
