@@ -409,11 +409,17 @@ class BybitService:
 
     def _get_closed_klines(self, symbol: str, interval: str, limit: int = 121) -> dict:
         validated = self._validate_symbol(symbol)
+        requested_limit = max(1, min(int(limit), 1000))
         interval_ms = int(interval) * 60_000
         data = self._public_get(
             "/v5/market/kline",
             parse.urlencode(
-                {"category": "linear", "symbol": validated["symbol"], "interval": interval, "limit": limit}
+                {
+                    "category": "linear",
+                    "symbol": validated["symbol"],
+                    "interval": interval,
+                    "limit": requested_limit,
+                }
             ),
         )
         now_ms = int(time.time() * 1000)
@@ -421,7 +427,7 @@ class BybitService:
             row
             for row in (data.get("result", {}).get("list") or [])
             if int(row[0]) + interval_ms <= now_ms
-        ][:120]
+        ][:requested_limit]
         return {"retCode": 0, "result": {"list": closed}}
 
     def _get_ticker(self, symbol: str) -> dict:
@@ -467,15 +473,15 @@ class BybitService:
                     "code": "NOT_CONFIGURED",
                     "status": "Bybit Demo Not Configured",
                     "detail": detail,
-                }
-            if exc.status_code == status.HTTP_401_UNAUTHORIZED:
-                return {
-                    "code": "AUTHENTICATION_FAILED",
-                    "status": "Bybit Demo Authentication Failed",
-                    "detail": detail,
+                    "equity": None,
+                    "availableBalance": None,
+                    "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
             return {
-                "code": "CONNECTION_ERROR",
-                "status": "Bybit Demo Connection Error",
+                "code": "ERROR",
+                "status": "Bybit Demo Unavailable",
                 "detail": detail,
+                "equity": None,
+                "availableBalance": None,
+                "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
