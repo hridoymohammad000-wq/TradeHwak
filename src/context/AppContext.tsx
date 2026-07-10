@@ -22,27 +22,19 @@ import {
   DataRequestState,
   DateTimeRange,
 } from '../api/types';
+import { getTickers, getSettings, updateSettings } from '../api/services';
+import { ApiError, runBackendScan, fetchBackendSignals } from '../api/client';
 import {
-  getTickers,
-  getSettings,
-  updateSettings,
-} from '../api/services';
-import {
-  ApiError,
   fetchCanonicalActiveTrades,
   fetchCanonicalJournal,
   fetchDashboardSummary,
-  runBackendScan,
-  fetchBackendSignals,
-} from '../api/client';
+} from '../api/resilientClient';
 
 export type PageName = 'dashboard' | 'scanner' | 'signals' | 'chart' | 'active_trades' | 'journal' | 'performance' | 'settings';
 
 interface AppContextType {
   currentPage: PageName;
   navigate: (page: PageName) => void;
-
-  // Legacy UI-only data retained for pages that are intentionally not wired in this phase.
   tickers: MarketTicker[];
   stats: DashboardStats | null;
   scannerData: ScannerResult[];
@@ -60,8 +52,6 @@ interface AppContextType {
   settings: ControlCenterSettings | null;
   selectedSymbol: AssetTicker;
   setSelectedSymbol: (symbol: AssetTicker) => void;
-
-  // Canonical FastAPI data for the three pages included in this phase.
   dashboardData: CanonicalDashboardData | null;
   dashboardState: DataRequestState;
   dashboardError: string | null;
@@ -77,7 +67,6 @@ interface AppContextType {
   refreshActiveTrades: () => Promise<void>;
   refreshJournal: (range?: DateTimeRange) => Promise<void>;
   setJournalRange: (range: DateTimeRange) => void;
-
   executeSignal: (signalId: string, margin: number, leverage: number) => Promise<void>;
   submitOrder: (symbol: AssetTicker, direction: 'LONG' | 'SHORT', margin: number, leverage: number, stopLoss: number, takeProfit: number) => Promise<void>;
   closePosition: (tradeId: string) => Promise<void>;
@@ -140,26 +129,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [signalsError, setSignalsError] = useState<string | null>(null);
   const [settings, setSettings] = useState<ControlCenterSettings | null>(null);
   const [selectedSymbol, setSelectedSymbol] = useState<AssetTicker>('BTC/USDT');
-
-  // These legacy values intentionally remain empty so no local trade/journal data can leak into wired pages.
   const [stats] = useState<DashboardStats | null>(null);
   const [activeTrades] = useState<ActiveTrade[]>([]);
   const [journalEntries] = useState<JournalEntry[]>([]);
-
   const [dashboardData, setDashboardData] = useState<CanonicalDashboardData | null>(null);
   const [dashboardState, setDashboardState] = useState<DataRequestState>('idle');
   const [dashboardError, setDashboardError] = useState<string | null>(null);
-
   const [activeTradesData, setActiveTradesData] = useState<CanonicalActiveTradesData | null>(null);
   const [todayClosedTradesData, setTodayClosedTradesData] = useState<CanonicalJournalData | null>(null);
   const [activeTradesState, setActiveTradesState] = useState<DataRequestState>('idle');
   const [activeTradesError, setActiveTradesError] = useState<string | null>(null);
-
   const [journalRange, setJournalRange] = useState<DateTimeRange>(() => getLocalDayRange());
   const [journalData, setJournalData] = useState<CanonicalJournalData | null>(null);
   const [journalState, setJournalState] = useState<DataRequestState>('idle');
   const [journalError, setJournalError] = useState<string | null>(null);
-
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => setToastMessage({ text, type });
@@ -270,10 +253,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const loadLegacyUnwiredPages = async () => {
       try {
-        const [fetchedTickers, fetchedSettings] = await Promise.all([
-          getTickers(),
-          getSettings(),
-        ]);
+        const [fetchedTickers, fetchedSettings] = await Promise.all([getTickers(), getSettings()]);
         setTickers(fetchedTickers);
         setSettings(fetchedSettings);
       } catch (error) {
