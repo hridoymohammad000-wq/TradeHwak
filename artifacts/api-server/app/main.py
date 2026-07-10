@@ -66,3 +66,5 @@ register_exception_handlers(app)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(api_router, prefix="/api")
+# Temporary compatibility prefix for the deployed frontend bundle that currently sends /api/api/*.
+app.include_router(api_router, prefix="/api/api", include_in_schema=False)
