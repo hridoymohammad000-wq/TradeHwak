@@ -7,11 +7,13 @@ from app.core.trading_clock import is_on_trading_date, trading_date
 from app.schemas.dashboard import (
     DashboardAccount,
     DashboardEvent,
+    DashboardProfitTracking,
     DashboardSummaryData,
     DashboardSummaryResponse,
     DashboardTodaySummary,
 )
 from app.services.bybit_service import BybitService
+from app.services.profit_tracking_service import ProfitTrackingService
 from app.services.settings_service import SettingsService
 from app.services.trade_service import TradeService
 
@@ -22,10 +24,12 @@ class DashboardService:
         settings_service: SettingsService,
         trade_service: TradeService,
         bybit_service: BybitService,
+        profit_tracking_service: ProfitTrackingService,
     ) -> None:
         self._settings_service = settings_service
         self._trade_service = trade_service
         self._bybit_service = bybit_service
+        self._profit_tracking_service = profit_tracking_service
 
     def get_summary(self) -> DashboardSummaryResponse:
         settings = self._settings_service.get_settings_state()
@@ -60,6 +64,12 @@ class DashboardService:
             )
         except (HTTPException, KeyError, TypeError, ValueError):
             pass
+
+        profit_state = self._profit_tracking_service.refresh(
+            closed_trades=closed_records,
+            account_equity=account.equity,
+            unrealized_pnl=float(unrealized_pnl or 0.0),
+        )
 
         now = datetime.now(timezone.utc).isoformat()
         recent_events = [
@@ -114,6 +124,20 @@ class DashboardService:
                     unrealized_pnl=unrealized_pnl,
                     realized_pnl_today=sum(realized_values) if realized_values else None,
                     average_risk_reward_today=(sum(rr_values) / len(rr_values)) if rr_values else None,
+                ),
+                profit_tracking=DashboardProfitTracking(
+                    trading_day=profit_state.trading_day.isoformat(),
+                    week_start=profit_state.week_start.isoformat(),
+                    daily_target_pct=profit_state.daily_target_pct,
+                    weekly_target_pct=profit_state.weekly_target_pct,
+                    daily_realized_pnl=profit_state.daily_realized_pnl,
+                    daily_realized_pct=profit_state.daily_realized_pct,
+                    daily_peak_profit_pct=profit_state.daily_peak_profit_pct,
+                    daily_locked_floor_pct=profit_state.daily_locked_floor_pct,
+                    weekly_realized_pnl=profit_state.weekly_realized_pnl,
+                    weekly_realized_pct=profit_state.weekly_realized_pct,
+                    weekly_peak_profit_pct=profit_state.weekly_peak_profit_pct,
+                    updated_at=profit_state.updated_at,
                 ),
                 recent_events=recent_events,
             ),
