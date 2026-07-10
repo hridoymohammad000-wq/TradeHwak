@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 class AutoTradeService:
+    MODE_OPEN_LIMITS = {
+        TradingMode.SCALPING: 5,
+        TradingMode.INTRADAY: 3,
+    }
+
     def __init__(
         self,
         settings_service: SettingsService,
@@ -79,13 +84,21 @@ class AutoTradeService:
                 self._last_reject_reason = bybit_status.detail
                 return {"status": "exchange_disconnected", "opened": 0}
 
-            remaining_slots = settings.max_open_positions - self._trade_service.get_open_trade_count()
             remaining_daily = settings.daily_max_trades - self._trade_service.get_daily_trade_count()
-            capacity = min(remaining_slots, remaining_daily)
-            if capacity <= 0:
+            if remaining_daily <= 0:
                 self._last_execution_status = "blocked"
-                self._last_reject_reason = "Risk limits reached for slots or daily trades."
+                self._last_reject_reason = "Daily trade limit reached."
                 return {"status": "limits_reached", "opened": 0}
+
+            active_data = self._trade_service.get_active_trades().data
+            open_counts = {
+                TradingMode.SCALPING: len(active_data.scalping_trades),
+                TradingMode.INTRADAY: len(active_data.intraday_trades),
+            }
+            opened_by_mode = {
+                TradingMode.SCALPING: 0,
+                TradingMode.INTRADAY: 0,
+            }
 
             enabled_modes: list[TradingMode] = []
             if settings.scalping_engine_enabled:
@@ -102,6 +115,7 @@ class AutoTradeService:
                 symbols = self._strategy_service.default_symbols(mode)
                 scanned_symbols += len(symbols)
                 evaluated_signals = []
+                mode_limit = self.MODE_OPEN_LIMITS[mode]
 
                 for symbol in symbols:
                     try:
@@ -119,7 +133,13 @@ class AutoTradeService:
                     evaluated_signals.append(signal)
                     evaluated_count += 1
 
-                    if opened >= capacity:
+                    if opened >= remaining_daily:
+                        self._last_reject_reason = "Daily trade limit reached."
+                        continue
+                    if open_counts[mode] + opened_by_mode[mode] >= mode_limit:
+                        self._last_reject_reason = (
+                            f"{mode.value.title()} open-trade limit of {mode_limit} reached."
+                        )
                         continue
                     if self._trade_service.has_open_trade_for_symbol(symbol):
                         self._last_reject_reason = f"{symbol} already has an open trade."
@@ -174,6 +194,7 @@ class AutoTradeService:
                     )
                     self._last_execution_status = "submitted"
                     opened += 1
+                    opened_by_mode[mode] += 1
 
                 self._signal_registry.replace(
                     mode,
