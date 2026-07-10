@@ -24,6 +24,21 @@ class DashboardTodaySummary(BaseModel):
     average_risk_reward_today: float | None = None
 
 
+class DashboardProfitTracking(BaseModel):
+    trading_day: str
+    week_start: str
+    daily_target_pct: float
+    weekly_target_pct: float
+    daily_realized_pnl: float
+    daily_realized_pct: float
+    daily_peak_profit_pct: float
+    daily_locked_floor_pct: float
+    weekly_realized_pnl: float
+    weekly_realized_pct: float
+    weekly_peak_profit_pct: float
+    updated_at: str | None = None
+
+
 class DashboardEvent(BaseModel):
     event_type: str
     message: str
@@ -40,6 +55,7 @@ class DashboardSummaryData(BaseModel):
     emergency_stop: bool
     account: DashboardAccount
     today_summary: DashboardTodaySummary
+    profit_tracking: DashboardProfitTracking
     recent_events: list[DashboardEvent]
 
 
