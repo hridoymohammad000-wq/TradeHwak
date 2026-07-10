@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
+from app.core.enums import TradingMode
 from app.db.repository import PersistenceRepository
 from app.schemas.workflow import (
     WorkflowOrderSnapshot,
@@ -86,91 +87,105 @@ class AutoTradeService:
                 self._last_reject_reason = "Risk limits reached for slots or daily trades."
                 return {"status": "limits_reached", "opened": 0}
 
+            enabled_modes: list[TradingMode] = []
+            if settings.scalping_engine_enabled:
+                enabled_modes.append(TradingMode.SCALPING)
+            if settings.intraday_engine_enabled:
+                enabled_modes.append(TradingMode.INTRADAY)
+
             opened = 0
-            selected_mode = settings.active_strategy_mode
-            timeframe = self._strategy_service.default_timeframe(selected_mode)
-            symbols = self._strategy_service.default_symbols(selected_mode)
-            self._last_scanner_status = f"scanned_{len(symbols)}_symbols"
-            evaluated_signals = []
+            scanned_symbols = 0
+            evaluated_count = 0
 
-            for symbol in symbols:
-                try:
-                    signal = self._strategy_service.evaluate_symbol(
-                        symbol=symbol,
-                        mode=selected_mode,
-                        timeframe=timeframe,
-                    )
-                except HTTPException as exc:
-                    self._last_reject_reason = self._format_http_detail(exc.detail)
-                    continue
+            for mode in enabled_modes:
+                timeframe = self._strategy_service.default_timeframe(mode)
+                symbols = self._strategy_service.default_symbols(mode)
+                scanned_symbols += len(symbols)
+                evaluated_signals = []
 
-                if signal is None:
-                    continue
-                evaluated_signals.append(signal)
+                for symbol in symbols:
+                    try:
+                        signal = self._strategy_service.evaluate_symbol(
+                            symbol=symbol,
+                            mode=mode,
+                            timeframe=timeframe,
+                        )
+                    except HTTPException as exc:
+                        self._last_reject_reason = self._format_http_detail(exc.detail)
+                        continue
 
-                if opened >= capacity:
-                    continue
-                if self._trade_service.has_open_trade_for_symbol(symbol):
-                    self._last_reject_reason = f"{symbol} already has an open trade."
-                    continue
+                    if signal is None:
+                        continue
+                    evaluated_signals.append(signal)
+                    evaluated_count += 1
 
-                self._last_candidate_signal = WorkflowSignalSnapshot(
-                    symbol=signal.symbol,
-                    direction=signal.direction.value,
-                    grade=signal.grade.value,
-                    timeframe=signal.timeframe.value,
-                    reason=signal.reason,
-                )
+                    if opened >= capacity:
+                        continue
+                    if self._trade_service.has_open_trade_for_symbol(symbol):
+                        self._last_reject_reason = f"{symbol} already has an open trade."
+                        continue
 
-                if signal.grade not in settings.allowed_signal_grades:
-                    self._last_signal_status = "filtered"
-                    self._last_reject_reason = (
-                        f"{signal.grade.value} is not allowed by current risk profile."
-                    )
-                    continue
-
-                self._last_signal_status = "candidate_ready"
-                signal_id = self._trade_service.build_signal_id(
-                    symbol=signal.symbol,
-                    timeframe=signal.timeframe,
-                    direction=signal.direction,
-                )
-
-                try:
-                    order = self._manual_trade_service.execute_strategy_trade(
+                    self._last_candidate_signal = WorkflowSignalSnapshot(
                         symbol=signal.symbol,
-                        direction=signal.direction,
-                        mode=signal.mode,
-                        timeframe=signal.timeframe,
-                        signal_id=signal_id,
+                        direction=signal.direction.value,
+                        grade=signal.grade.value,
+                        timeframe=signal.timeframe.value,
+                        reason=signal.reason,
                     )
-                except HTTPException as exc:
-                    self._last_execution_status = "rejected"
-                    self._last_reject_reason = self._format_http_detail(exc.detail)
-                    continue
-                except Exception as exc:
-                    self._last_execution_status = "rejected"
-                    self._last_reject_reason = f"Unexpected execution error: {exc}"
-                    logger.exception("Unexpected auto-trade execution error")
-                    continue
 
-                self._last_order = WorkflowOrderSnapshot(
-                    symbol=order.data.symbol,
-                    side=order.data.side,
-                    qty=order.data.qty,
-                    order_id=order.data.order_id,
-                    status=order.data.status,
+                    if signal.grade not in settings.allowed_signal_grades:
+                        self._last_signal_status = "filtered"
+                        self._last_reject_reason = (
+                            f"{signal.grade.value} is not allowed by current risk profile."
+                        )
+                        continue
+
+                    self._last_signal_status = "candidate_ready"
+                    signal_id = self._trade_service.build_signal_id(
+                        symbol=signal.symbol,
+                        timeframe=signal.timeframe,
+                        direction=signal.direction,
+                    )
+
+                    try:
+                        order = self._manual_trade_service.execute_strategy_trade(
+                            symbol=signal.symbol,
+                            direction=signal.direction,
+                            mode=signal.mode,
+                            timeframe=signal.timeframe,
+                            signal_id=signal_id,
+                        )
+                    except HTTPException as exc:
+                        self._last_execution_status = "rejected"
+                        self._last_reject_reason = self._format_http_detail(exc.detail)
+                        continue
+                    except Exception as exc:
+                        self._last_execution_status = "rejected"
+                        self._last_reject_reason = f"Unexpected execution error: {exc}"
+                        logger.exception("Unexpected auto-trade execution error")
+                        continue
+
+                    self._last_order = WorkflowOrderSnapshot(
+                        symbol=order.data.symbol,
+                        side=order.data.side,
+                        qty=order.data.qty,
+                        order_id=order.data.order_id,
+                        status=order.data.status,
+                    )
+                    self._last_execution_status = "submitted"
+                    opened += 1
+
+                self._signal_registry.replace(
+                    mode,
+                    evaluated_signals,
+                    source="auto_trade_cycle",
                 )
-                self._last_execution_status = "submitted"
-                opened += 1
 
-            self._signal_registry.replace(
-                selected_mode,
-                evaluated_signals,
-                source="auto_trade_cycle",
+            self._last_scanner_status = (
+                f"scanned_{scanned_symbols}_symbols_across_{len(enabled_modes)}_modes"
             )
 
-            if not evaluated_signals:
+            if evaluated_count == 0:
                 self._last_signal_status = "no_signal"
                 self._last_reject_reason = (
                     self._last_reject_reason or "Scanner found no executable signal."
