@@ -73,6 +73,7 @@ class StepTwoWorkflowTests(unittest.TestCase):
         service = ManualTradeService.__new__(ManualTradeService)
         with self.assertRaises(Exception) as context:
             service._resolve_protection_prices(
+                symbol="BTCUSDT",
                 direction=Direction.BUY,
                 mode=TradingMode.SCALPING,
                 timeframe=None,
