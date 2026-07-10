@@ -11,6 +11,8 @@ class DashboardAccount(BaseModel):
 
 
 class DashboardTodaySummary(BaseModel):
+    opened_trades_today: int
+    active_trades_now: int
     total_open_trades: int
     scalping_open_trades: int
     intraday_open_trades: int
@@ -18,7 +20,9 @@ class DashboardTodaySummary(BaseModel):
     closed_trades_today: int
     wins_today: int = 0
     losses_today: int = 0
+    breakeven_today: int = 0
     win_rate_today: float | None = None
+    loss_rate_today: float | None = None
     unrealized_pnl: float | None = None
     realized_pnl_today: float | None = None
     average_risk_reward_today: float | None = None
