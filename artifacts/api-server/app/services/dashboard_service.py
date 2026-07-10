@@ -49,9 +49,17 @@ class DashboardService:
             trade for trade in closed_records
             if is_on_trading_date(trade.closed_time, today)
         ]
-        wins = sum(1 for trade in closed_today if trade.result == "win")
-        losses = sum(1 for trade in closed_today if trade.result == "loss")
+        opened_today_ids = {
+            trade.trade_id
+            for trade in [*active_records, *closed_records]
+            if is_on_trading_date(trade.opened_at, today)
+        }
+
         realized_values = [trade.realized_pnl for trade in closed_today if trade.realized_pnl is not None]
+        wins = sum(1 for value in realized_values if value > 0)
+        losses = sum(1 for value in realized_values if value < 0)
+        breakeven = sum(1 for value in realized_values if value == 0)
+        decided_trades = wins + losses
         rr_values = [trade.risk_reward for trade in closed_today if trade.risk_reward is not None]
 
         account = DashboardAccount(status="unavailable")
@@ -113,6 +121,8 @@ class DashboardService:
                 emergency_stop=settings.emergency_stop,
                 account=account,
                 today_summary=DashboardTodaySummary(
+                    opened_trades_today=len(opened_today_ids),
+                    active_trades_now=len(active_records),
                     total_open_trades=len(active_records),
                     scalping_open_trades=scalping_open,
                     intraday_open_trades=intraday_open,
@@ -120,7 +130,9 @@ class DashboardService:
                     closed_trades_today=len(closed_today),
                     wins_today=wins,
                     losses_today=losses,
-                    win_rate_today=(wins / len(closed_today) * 100) if closed_today else None,
+                    breakeven_today=breakeven,
+                    win_rate_today=(wins / decided_trades * 100) if decided_trades else None,
+                    loss_rate_today=(losses / decided_trades * 100) if decided_trades else None,
                     unrealized_pnl=unrealized_pnl,
                     realized_pnl_today=sum(realized_values) if realized_values else None,
                     average_risk_reward_today=(sum(rr_values) / len(rr_values)) if rr_values else None,
