@@ -5,10 +5,12 @@ from fastapi import HTTPException, status
 from app.schemas.scanner import ScanData, ScanRequest, ScanResponse, ScanResult
 from app.services.settings_service import SettingsService
 from app.services.signal_registry import SignalRegistry
-from app.services.strategy_service import StrategyService
+from app.services.strategy_service import StrategyService, StrategySignal
 
 
 class ScannerService:
+    MAX_RESULTS = 10
+
     def __init__(
         self,
         settings_service: SettingsService,
@@ -19,6 +21,13 @@ class ScannerService:
         self._strategy_service = strategy_service
         self._signal_registry = signal_registry
         self._scan_lock = Lock()
+
+    @staticmethod
+    def _score(signal: StrategySignal) -> float:
+        try:
+            return float(signal.metrics.get("final_score", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            return 0.0
 
     def scan(self, payload: ScanRequest | None) -> ScanResponse:
         if not self._scan_lock.acquire(blocking=False):
@@ -34,8 +43,7 @@ class ScannerService:
                 or self._settings_service.get_mode_summary().data.active_strategy_mode
             )
             symbols = request.symbols or self._strategy_service.default_symbols(selected_mode)
-            evaluated_signals = []
-            filtered_results: list[ScanResult] = []
+            evaluated_signals: list[StrategySignal] = []
 
             for symbol in symbols:
                 try:
@@ -46,24 +54,20 @@ class ScannerService:
                     )
                 except HTTPException:
                     continue
-                if signal is None:
-                    continue
+                if signal is not None:
+                    evaluated_signals.append(signal)
 
-                evaluated_signals.append(signal)
-                if request.direction is not None and signal.direction != request.direction:
-                    continue
-                if request.grade is not None and signal.grade != request.grade:
-                    continue
-                filtered_results.append(
-                    ScanResult(
-                        symbol=signal.symbol,
-                        mode=signal.mode,
-                        timeframe=signal.timeframe,
-                        direction=signal.direction,
-                        grade=signal.grade,
-                        reason=signal.reason,
-                    )
-                )
+            ranked = sorted(
+                evaluated_signals,
+                key=lambda signal: (self._score(signal), signal.symbol),
+                reverse=True,
+            )
+            filtered = [
+                signal
+                for signal in ranked
+                if (request.direction is None or signal.direction == request.direction)
+                and (request.grade is None or signal.grade == request.grade)
+            ][: self.MAX_RESULTS]
 
             self._signal_registry.replace(
                 selected_mode,
@@ -76,7 +80,17 @@ class ScannerService:
                     mode=selected_mode,
                     timeframe=request.timeframe
                     or self._strategy_service.default_timeframe(selected_mode),
-                    results=filtered_results,
+                    results=[
+                        ScanResult(
+                            symbol=signal.symbol,
+                            mode=signal.mode,
+                            timeframe=signal.timeframe,
+                            direction=signal.direction,
+                            grade=signal.grade,
+                            reason=signal.reason,
+                        )
+                        for signal in filtered
+                    ],
                 ),
             )
         finally:
