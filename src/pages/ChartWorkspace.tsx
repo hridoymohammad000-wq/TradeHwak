@@ -292,8 +292,6 @@ export default function ChartWorkspace() {
       lastValueVisible: false,
     });
 
-    const syncFromMain = (range: Parameters<IChartApi['timeScale']>[0]) => range;
-    void syncFromMain;
     main.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
       rsi.timeScale().setVisibleLogicalRange(range);
