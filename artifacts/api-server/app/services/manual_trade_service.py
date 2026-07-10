@@ -98,7 +98,7 @@ class ManualTradeService:
         try:
             order = self._bybit_service.create_private_order(order_payload)
         except HTTPException as exc:
-            self._log("order_rejected", {"symbol": symbol, "side": side, "qty": qty_string, "market_price": float(market_price), "stop_loss": float(rounded_stop), "take_profit": float(rounded_take), "planned_risk_usdt": float(planned_risk), "detail": exc.detail})
+            self._log("order_rejected", {"symbol": symbol, "side": side, "qty": qty_string, "market_price": float(market_price), "stop_loss": float(rounded_stop), "take_profit": float(rounded_tak[...] )
             raise
 
         order_id = order.get("result", {}).get("orderId")
@@ -141,7 +141,7 @@ class ManualTradeService:
     def execute_strategy_trade(self, *, symbol: str, direction: Direction, mode: TradingMode, timeframe: Timeframe | None, signal_id: str | None = None) -> ManualTradeResponse:
         return self.execute_manual_trade(ManualTradeRequest(symbol=symbol, direction=direction, mode=mode, timeframe=timeframe), signal_id=signal_id)
 
-    def _resolve_protection_prices(self, *, symbol: str, direction: Direction, mode: TradingMode, timeframe: Timeframe | None, market_price: Decimal, stop_loss: float | None, take_profit: float | None) -> tuple[Decimal, Decimal]:
+    def _resolve_protection_prices(self, *, symbol: str, direction: Direction, mode: TradingMode, timeframe: Timeframe | None, market_price: Decimal, stop_loss: float | None, take_profit: float |[...]
         if (stop_loss is None) != (take_profit is None):
             raise HTTPException(status_code=400, detail="Provide both stop loss and take profit, or leave both empty.")
         if stop_loss is not None and take_profit is not None:
@@ -165,7 +165,7 @@ class ManualTradeService:
             distance = max(minimum_distance, min(distance, maximum_distance))
             generated_sl = market_price - distance if direction == Direction.BUY else market_price + distance
             generated_tp = market_price + distance * Decimal("2") if direction == Direction.BUY else market_price - distance * Decimal("2")
-            self._log("protection_generated", {"symbol": symbol, "interval": interval, "atr": float(atr), "swing": float(swing_low if direction == Direction.BUY else swing_high), "stop_loss": float(generated_sl), "take_profit": float(generated_tp)})
+            self._log("protection_generated", {"symbol": symbol, "interval": interval, "atr": float(atr), "swing": float(swing_low if direction == Direction.BUY else swing_high), "stop_loss": flo[...] )
             return generated_sl, generated_tp
         except Exception as exc:
             fallback_pct = Decimal("0.0065") if mode == TradingMode.SCALPING else Decimal("0.0100")
@@ -175,7 +175,8 @@ class ManualTradeService:
             return market_price * (Decimal("1") + fallback_pct), market_price * (Decimal("1") - fallback_pct * Decimal("2"))
 
     def _load_ohlc(self, symbol: str, interval: str, limit: int) -> list[tuple[Decimal, Decimal, Decimal, Decimal]]:
-        rows = list(reversed(self._bybit_service.get_closed_klines(symbol, interval, limit=limit)))
+        payload = self._bybit_service._get_closed_klines(symbol, interval, limit=limit)
+        rows = list(reversed(payload.get("result", {}).get("list", [])))
         result = []
         for row in rows:
             try:
