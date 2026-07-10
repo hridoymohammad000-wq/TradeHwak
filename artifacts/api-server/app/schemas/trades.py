@@ -48,6 +48,7 @@ class ClosedTradeRecord(BaseModel):
     close_reason: str | None = None
     exit_analysis: str | None = None
     timeframe: Timeframe | None = None
+    opened_at: str | None = None
     closed_time: str | None = None
 
 
