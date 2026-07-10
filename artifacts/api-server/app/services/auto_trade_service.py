@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from app.core.enums import TradingMode
+from app.core.trading_clock import is_on_trading_date, trading_date
 from app.db.repository import PersistenceRepository
 from app.schemas.workflow import (
     WorkflowOrderSnapshot,
@@ -13,6 +14,7 @@ from app.schemas.workflow import (
 )
 from app.services.bybit_service import BybitService
 from app.services.manual_trade_service import ManualTradeService
+from app.services.profit_tracking_service import ProfitTrackingService
 from app.services.settings_service import SettingsService
 from app.services.signal_registry import SignalRegistry
 from app.services.strategy_service import StrategyService
@@ -27,6 +29,15 @@ class AutoTradeService:
         TradingMode.SCALPING: 5,
         TradingMode.INTRADAY: 3,
     }
+    MODE_LEVERAGE = {
+        TradingMode.SCALPING: 10,
+        TradingMode.INTRADAY: 5,
+    }
+    MODE_REALIZED_LOSS_LIMIT_PCT = {
+        TradingMode.SCALPING: -2.0,
+        TradingMode.INTRADAY: -3.0,
+    }
+    COMBINED_REALIZED_LOSS_LIMIT_PCT = -5.0
 
     def __init__(
         self,
@@ -37,6 +48,7 @@ class AutoTradeService:
         trade_service: TradeService,
         signal_registry: SignalRegistry,
         repository: PersistenceRepository | None = None,
+        profit_tracking_service: ProfitTrackingService | None = None,
     ) -> None:
         self._settings_service = settings_service
         self._bybit_service = bybit_service
@@ -45,6 +57,7 @@ class AutoTradeService:
         self._trade_service = trade_service
         self._signal_registry = signal_registry
         self._repository = repository
+        self._profit_tracking_service = profit_tracking_service
         self._last_scanner_status = "idle"
         self._last_signal_status = "idle"
         self._last_execution_status = "idle"
@@ -84,11 +97,14 @@ class AutoTradeService:
                 self._last_reject_reason = bybit_status.detail
                 return {"status": "exchange_disconnected", "opened": 0}
 
-            remaining_daily = settings.daily_max_trades - self._trade_service.get_daily_trade_count()
-            if remaining_daily <= 0:
+            blocked_modes, combined_stop = self._realized_loss_blocks()
+            if combined_stop:
+                self._settings_service.update_control_state({"auto_trade_enabled": False})
                 self._last_execution_status = "blocked"
-                self._last_reject_reason = "Daily trade limit reached."
-                return {"status": "limits_reached", "opened": 0}
+                self._last_reject_reason = (
+                    "Combined net realized daily loss reached -5%. Auto trade stopped."
+                )
+                return {"status": "realized_loss_stop", "opened": 0}
 
             active_data = self._trade_service.get_active_trades().data
             open_counts = {
@@ -101,10 +117,15 @@ class AutoTradeService:
             }
 
             enabled_modes: list[TradingMode] = []
-            if settings.scalping_engine_enabled:
+            if settings.scalping_engine_enabled and TradingMode.SCALPING not in blocked_modes:
                 enabled_modes.append(TradingMode.SCALPING)
-            if settings.intraday_engine_enabled:
+            if settings.intraday_engine_enabled and TradingMode.INTRADAY not in blocked_modes:
                 enabled_modes.append(TradingMode.INTRADAY)
+
+            if not enabled_modes:
+                self._last_execution_status = "blocked"
+                self._last_reject_reason = "All enabled modes reached their net realized loss limits."
+                return {"status": "realized_loss_stop", "opened": 0}
 
             opened = 0
             scanned_symbols = 0
@@ -133,9 +154,6 @@ class AutoTradeService:
                     evaluated_signals.append(signal)
                     evaluated_count += 1
 
-                    if opened >= remaining_daily:
-                        self._last_reject_reason = "Daily trade limit reached."
-                        continue
                     if open_counts[mode] + opened_by_mode[mode] >= mode_limit:
                         self._last_reject_reason = (
                             f"{mode.value.title()} open-trade limit of {mode_limit} reached."
@@ -168,6 +186,9 @@ class AutoTradeService:
                     )
 
                     try:
+                        leverage_setter = getattr(self._bybit_service, "set_symbol_leverage", None)
+                        if callable(leverage_setter):
+                            leverage_setter(signal.symbol, self.MODE_LEVERAGE[mode])
                         order = self._manual_trade_service.execute_strategy_trade(
                             symbol=signal.symbol,
                             direction=signal.direction,
@@ -220,6 +241,38 @@ class AutoTradeService:
             }
         finally:
             self._persist_state()
+
+    def _realized_loss_blocks(self) -> tuple[set[TradingMode], bool]:
+        if self._profit_tracking_service is None:
+            return set(), False
+        state = self._profit_tracking_service.refresh_from_sources(
+            self._trade_service,
+            self._bybit_service,
+        )
+        baseline = state.daily_start_equity
+        if baseline is None or baseline <= 0:
+            return set(), False
+
+        today = trading_date()
+        closed = self._trade_service.get_closed_trades().data.closed_trades
+        realized_by_mode = {
+            TradingMode.SCALPING: 0.0,
+            TradingMode.INTRADAY: 0.0,
+        }
+        for trade in closed:
+            if not is_on_trading_date(trade.closed_time, today):
+                continue
+            mode = trade.mode
+            if mode in realized_by_mode:
+                realized_by_mode[mode] += float(trade.realized_pnl or 0.0)
+
+        blocked_modes = {
+            mode
+            for mode, realized in realized_by_mode.items()
+            if (realized / baseline) * 100.0 <= self.MODE_REALIZED_LOSS_LIMIT_PCT[mode]
+        }
+        combined_stop = state.daily_realized_pct <= self.COMBINED_REALIZED_LOSS_LIMIT_PCT
+        return blocked_modes, combined_stop
 
     def get_workflow_status(self) -> WorkflowStatusResponse:
         settings = self._settings_service.get_settings_state()
