@@ -30,44 +30,72 @@ class SignalsService:
         normalized_symbol = symbol.strip().upper() if symbol else None
         settings_state = self._settings_service.get_settings_state()
 
-        # GET /signals must remain a fast read-only endpoint. Signal generation belongs
-        # to the scanner/background workflow; doing live Bybit evaluation here can
-        # exceed the frontend request timeout and incorrectly show "Backend unavailable".
         evaluated = self._signal_registry.get(selected_mode)
         if normalized_symbol:
             evaluated = [item for item in evaluated if item.symbol == normalized_symbol]
 
-        filtered_signals: list[SignalItem] = []
-        fallback_signals: list[SignalItem] = []
+        signals: list[SignalItem] = []
         for signal_item in evaluated:
-            if timeframe is not None and signal_item.timeframe != timeframe:
+            if signal_item.status != "armed":
                 continue
-            base_signal = SignalItem(
-                signal_id=(
-                    f"sig-{signal_item.symbol.lower()}-"
-                    f"{signal_item.timeframe.value.lower()}-{signal_item.direction.value}"
-                ),
-                symbol=signal_item.symbol,
-                direction=signal_item.direction,
-                grade=signal_item.grade,
-                mode=signal_item.mode,
-                timeframe=signal_item.timeframe,
-                status=signal_item.status,
-                entry_price=signal_item.entry_price,
-                current_price=signal_item.current_price,
-            )
-            fallback_signals.append(base_signal)
             if signal_item.grade not in settings_state.allowed_signal_grades:
+                continue
+            if timeframe is not None and signal_item.timeframe != timeframe:
                 continue
             if grade is not None and signal_item.grade != grade:
                 continue
-            filtered_signals.append(base_signal)
 
-        if not filtered_signals and grade is None:
-            filtered_signals = [
-                signal.model_copy(update={"status": "filtered_by_risk_profile"})
-                for signal in fallback_signals
-            ]
+            metrics = signal_item.metrics or {}
+            entry = float(signal_item.entry_price)
+            atr = float(metrics.get("atr14") or 0)
+            swing_low = float(metrics.get("swing_low") or 0)
+            swing_high = float(metrics.get("swing_high") or 0)
+
+            if signal_item.direction.value == "buy":
+                structural_stop = swing_low if 0 < swing_low < entry else entry - atr
+                stop_loss = min(structural_stop, entry - max(atr * 0.8, entry * 0.0035))
+                risk = entry - stop_loss
+                take_profit = entry + risk * 2
+            else:
+                structural_stop = swing_high if swing_high > entry else entry + atr
+                stop_loss = max(structural_stop, entry + max(atr * 0.8, entry * 0.0035))
+                risk = stop_loss - entry
+                take_profit = entry - risk * 2
+
+            strategy = (
+                "EMA Pullback Scalping"
+                if signal_item.mode == TradingMode.SCALPING
+                else "Trend Continuation Intraday"
+            )
+            higher_timeframe = "H1" if signal_item.mode == TradingMode.SCALPING else "H4"
+            score = float(metrics.get("final_score") or 0)
+            htf_score = float(metrics.get("higher_timeframe_score") or 0)
+
+            signals.append(
+                SignalItem(
+                    signal_id=(
+                        f"sig-{signal_item.symbol.lower()}-"
+                        f"{signal_item.timeframe.value.lower()}-{signal_item.direction.value}"
+                    ),
+                    symbol=signal_item.symbol,
+                    direction=signal_item.direction,
+                    grade=signal_item.grade,
+                    mode=signal_item.mode,
+                    timeframe=signal_item.timeframe,
+                    higher_timeframe=higher_timeframe,
+                    status=signal_item.status,
+                    strategy=strategy,
+                    reason=signal_item.reason,
+                    entry_price=round(entry, 8),
+                    current_price=round(float(signal_item.current_price), 8),
+                    stop_loss=round(stop_loss, 8),
+                    take_profit=round(take_profit, 8),
+                    risk_reward=2.0,
+                    score=round(score, 2),
+                    confidence=round(score, 2),
+                    htf_score=round(htf_score, 2),
+                )
+            )
 
         return SignalsResponse(
             message="Signals fetched successfully.",
@@ -78,6 +106,6 @@ class SignalsService:
                     symbol=normalized_symbol,
                     timeframe=timeframe,
                 ),
-                signals=filtered_signals,
+                signals=signals,
             ),
         )
