@@ -61,6 +61,7 @@ auto_trade_service = ManagedAutoTradeService(
     trade_service=trade_service,
     signal_registry=signal_registry,
     repository=persistence_repository,
+    profit_tracking_service=profit_tracking_service,
     trade_management_service=trade_management_service,
 )
 dashboard_service = DashboardService(
