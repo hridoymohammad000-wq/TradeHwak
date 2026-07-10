@@ -18,6 +18,9 @@ from app.core.state import (
 )
 
 
+AUTO_TRADE_INTERVAL_SECONDS = 300
+
+
 async def _auto_trade_loop() -> None:
     while True:
         try:
@@ -29,7 +32,7 @@ async def _auto_trade_loop() -> None:
                 "auto_trade_cycle_failed",
                 {"error": str(exc)},
             )
-        await asyncio.sleep(15)
+        await asyncio.sleep(AUTO_TRADE_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
