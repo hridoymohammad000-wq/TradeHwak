@@ -20,7 +20,7 @@ class TradingSettingsModel(BaseModel):
     daily_max_loss: float = Field(default=0.0, ge=0)
     daily_max_trades: int = Field(default=0, ge=0)
     risk_per_trade_pct: float = Field(default=0.0, ge=0, le=100)
-    max_open_positions: int = Field(default=0, ge=0)
+    max_open_positions: int = Field(default=5, ge=1)
     allowed_signal_grades: list[SignalGrade] = Field(
         default_factory=lambda: [SignalGrade.A_PLUS, SignalGrade.A]
     )
