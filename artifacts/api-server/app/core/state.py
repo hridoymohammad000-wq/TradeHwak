@@ -53,6 +53,7 @@ auto_trade_service = AutoTradeService(
 dashboard_service = DashboardService(
     settings_service=settings_service,
     trade_service=trade_service,
+    bybit_service=bybit_service,
 )
 chart_context_service = ChartContextService()
 engine_service = EngineService(
