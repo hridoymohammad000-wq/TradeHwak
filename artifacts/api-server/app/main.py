@@ -12,6 +12,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.state import (
     auto_trade_service,
     persistence_repository,
+    profit_tracking_service,
     settings_service,
     trade_service,
 )
@@ -36,6 +37,7 @@ async def lifespan(_: FastAPI):
     persistence_repository.initialize()
     settings_service.reload_from_persistence()
     trade_service.reload_from_persistence()
+    profit_tracking_service.reload_from_persistence()
     task = asyncio.create_task(_auto_trade_loop())
     try:
         yield
