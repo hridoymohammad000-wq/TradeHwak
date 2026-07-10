@@ -54,51 +54,51 @@ class StrategyService:
 
     def evaluate_symbol(self, symbol: str, mode: TradingMode, timeframe: Timeframe | None) -> StrategySignal | None:
         selected_timeframe = timeframe or self.default_timeframe(mode)
-        candles = self._load_candles(symbol, self._INTERVAL_MAP[selected_timeframe], 120)
-        if len(candles) < 60:
+        candles = self._load_candles(symbol, self._INTERVAL_MAP[selected_timeframe], 240)
+        minimum = 210 if mode == TradingMode.INTRADAY else 80
+        if len(candles) < minimum:
             return None
 
         closes = [item.close for item in candles]
         current_price = candles[-1].close
         ema20 = self._ema(closes, 20)
         ema50 = self._ema(closes, 50)
+        ema200 = self._ema(closes, 200)
         rsi = self._rsi(closes, 14)
         atr = self._atr(candles, 14)
         if None in (ema20, ema50, rsi, atr) or current_price <= 0:
             return None
 
-        trend_gap_pct = abs(ema20 - ema50) / current_price * 100
-        atr_pct = atr / current_price * 100
         direction = self._base_direction(current_price, ema20, ema50, rsi)
         if direction is None:
             return None
-
-        extension_pct = abs(current_price - ema20) / current_price * 100
-        maximum_extension = max(atr_pct * 2.2, 0.8 if mode == TradingMode.SCALPING else 1.25)
-        if extension_pct > maximum_extension:
+        if mode == TradingMode.INTRADAY and not self._ema200_aligned(direction, current_price, ema200):
             return None
 
-        base_score = self._base_score(direction, trend_gap_pct, rsi)
+        trend_gap_pct = abs(ema20 - ema50) / current_price * 100
+        atr_pct = atr / current_price * 100
+        extension_pct = abs(current_price - ema20) / current_price * 100
+        max_extension = max(atr_pct * (1.8 if mode == TradingMode.SCALPING else 2.4), 0.65 if mode == TradingMode.SCALPING else 1.35)
+        if extension_pct > max_extension:
+            return None
+
         higher_score = self._higher_timeframe_score(symbol, mode, direction)
+        if mode == TradingMode.INTRADAY and higher_score < 0:
+            return None
         candle_score = self._candle_confirmation_score(candles, direction)
         volume_score = self._volume_confirmation_score(candles)
+        mode_score = self._mode_specific_score(mode, direction, trend_gap_pct, rsi, atr_pct, volume_score)
         extension_penalty = self._extension_penalty(extension_pct, atr_pct)
-        final_score = max(0.0, min(100.0, base_score + higher_score + candle_score + volume_score - extension_penalty))
+        final_score = max(0.0, min(100.0, mode_score + higher_score + candle_score + volume_score - extension_penalty))
         grade = self._grade_from_score(final_score)
-        if grade == SignalGrade.B and final_score < 58:
+        if grade not in {SignalGrade.A_PLUS, SignalGrade.A}:
             return None
 
         recent = candles[-12:]
         swing_low = min(item.low for item in recent)
         swing_high = max(item.high for item in recent)
-        status_map = {
-            SignalGrade.A_PLUS: "armed",
-            SignalGrade.A: "watching",
-            SignalGrade.B_PLUS: "queued",
-            SignalGrade.B: "standby",
-        }
         reason = (
-            f"{grade.value} {direction.value} setup on {selected_timeframe.value}: "
+            f"{grade.value} {mode.value} {direction.value} setup on {selected_timeframe.value}: "
             f"score {final_score:.1f}, EMA gap {trend_gap_pct:.2f}%, RSI {rsi:.1f}, "
             f"HTF {higher_score:+.0f}, candle {candle_score:+.0f}, volume {volume_score:+.0f}."
         )
@@ -108,7 +108,7 @@ class StrategyService:
             timeframe=selected_timeframe,
             direction=direction,
             grade=grade,
-            status=status_map[grade],
+            status="armed" if grade == SignalGrade.A_PLUS else "watching",
             entry_price=round(current_price, 8),
             current_price=round(current_price, 8),
             reason=reason,
@@ -116,6 +116,7 @@ class StrategyService:
                 "current_price": round(current_price, 8),
                 "ema20": round(ema20, 8),
                 "ema50": round(ema50, 8),
+                "ema200": round(ema200 or 0.0, 8),
                 "rsi14": round(rsi, 2),
                 "atr14": round(atr, 8),
                 "atr_pct": round(atr_pct, 4),
@@ -143,36 +144,52 @@ class StrategyService:
 
     @staticmethod
     def _base_direction(price: float, ema20: float, ema50: float, rsi: float) -> Direction | None:
-        if price > ema20 > ema50 and 50 <= rsi <= 74:
+        if price > ema20 > ema50 and 52 <= rsi <= 72:
             return Direction.BUY
-        if price < ema20 < ema50 and 26 <= rsi <= 50:
-            return Direction.SELL
-        if price > ema20 and ema20 >= ema50 * 0.999 and rsi >= 49:
-            return Direction.BUY
-        if price < ema20 and ema20 <= ema50 * 1.001 and rsi <= 51:
+        if price < ema20 < ema50 and 28 <= rsi <= 48:
             return Direction.SELL
         return None
 
     @staticmethod
-    def _base_score(direction: Direction, trend_gap_pct: float, rsi: float) -> float:
-        score = 52.0 + min(trend_gap_pct / 0.35, 1.0) * 18.0
+    def _ema200_aligned(direction: Direction, price: float, ema200: float | None) -> bool:
+        if ema200 is None:
+            return False
+        return price > ema200 if direction == Direction.BUY else price < ema200
+
+    @staticmethod
+    def _mode_specific_score(mode: TradingMode, direction: Direction, trend_gap_pct: float, rsi: float, atr_pct: float, volume_score: float) -> float:
         momentum = rsi - 50 if direction == Direction.BUY else 50 - rsi
-        return score + max(0.0, min(momentum, 15.0)) * 0.8
+        if mode == TradingMode.SCALPING:
+            score = 58.0 + min(trend_gap_pct / 0.25, 1.0) * 15.0
+            score += max(0.0, min(momentum, 14.0)) * 0.65
+            if atr_pct < 0.12:
+                score -= 8.0
+            if volume_score <= 0:
+                score -= 4.0
+            return score
+        score = 60.0 + min(trend_gap_pct / 0.55, 1.0) * 17.0
+        score += max(0.0, min(momentum, 16.0)) * 0.55
+        if atr_pct < 0.20:
+            score -= 5.0
+        return score
 
     def _higher_timeframe_score(self, symbol: str, mode: TradingMode, direction: Direction) -> float:
         try:
-            candles = self._load_candles(symbol, self._HIGHER_INTERVAL[mode], 80)
+            candles = self._load_candles(symbol, self._HIGHER_INTERVAL[mode], 220)
             closes = [item.close for item in candles]
             ema20 = self._ema(closes, 20)
             ema50 = self._ema(closes, 50)
+            ema200 = self._ema(closes, 200)
             if ema20 is None or ema50 is None or not closes:
                 return 0.0
             aligned = closes[-1] > ema20 > ema50 if direction == Direction.BUY else closes[-1] < ema20 < ema50
             opposed = closes[-1] < ema20 < ema50 if direction == Direction.BUY else closes[-1] > ema20 > ema50
+            if mode == TradingMode.INTRADAY and ema200 is not None:
+                aligned = aligned and (closes[-1] > ema200 if direction == Direction.BUY else closes[-1] < ema200)
             if aligned:
-                return 10.0
+                return 12.0 if mode == TradingMode.INTRADAY else 10.0
             if opposed:
-                return -6.0
+                return -10.0 if mode == TradingMode.INTRADAY else -6.0
         except Exception:
             return 0.0
         return 0.0
@@ -221,11 +238,11 @@ class StrategyService:
 
     @staticmethod
     def _grade_from_score(score: float) -> SignalGrade:
-        if score >= 84:
+        if score >= 90:
             return SignalGrade.A_PLUS
-        if score >= 74:
+        if score >= 85:
             return SignalGrade.A
-        if score >= 64:
+        if score >= 75:
             return SignalGrade.B_PLUS
         return SignalGrade.B
 
