@@ -47,7 +47,7 @@ export default function Signals() {
       {signalsState === 'backend_error' && <StatePanel title="Backend error" detail={signalsError} />}
       {(signalsState === 'empty' || (signalsState === 'ready' && signals.length === 0)) && <StatePanel title="No actionable backend signals" detail="Watching, queued, rejected, skipped, and failed candidates remain on the Scanner page." />}
 
-      {signalsState === 'ready' && signals.length > 0 && <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">{signals.map((signal) => {
+      {signalsState === 'ready' && signals.length > 0 && <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">{signals.map((signal) => {
         const detail = signal as typeof signal & {
           higher_timeframe?: string | null; stop_loss?: number | null; take_profit?: number | null;
           risk_reward?: number | null; score?: number | null; confidence?: number | null; htf_score?: number | null;
