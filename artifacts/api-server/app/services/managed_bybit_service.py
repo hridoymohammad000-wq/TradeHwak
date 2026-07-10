@@ -4,7 +4,7 @@ from app.services.bybit_service import BybitService
 
 
 class ManagedBybitService(BybitService):
-    """Apply managed-order protection and explicit symbol leverage."""
+    """Apply explicit symbol leverage while preserving protected orders."""
 
     def set_symbol_leverage(self, symbol: str, leverage: int) -> None:
         if leverage <= 0:
@@ -23,9 +23,7 @@ class ManagedBybitService(BybitService):
                 raise
 
     def create_private_order(self, payload: dict) -> dict:
-        order_payload = dict(payload)
-        is_entry_order = not bool(order_payload.get("reduceOnly"))
-        if is_entry_order and order_payload.get("stopLoss"):
-            order_payload.pop("takeProfit", None)
-            order_payload.pop("tpTriggerBy", None)
-        return super().create_private_order(order_payload)
+        # Entry orders must preserve both stop-loss and take-profit fields.
+        # If Bybit rejects the protected order, the caller receives the error
+        # and no unprotected fallback order is submitted.
+        return super().create_private_order(dict(payload))
