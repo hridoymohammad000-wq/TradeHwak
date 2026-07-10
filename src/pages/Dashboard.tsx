@@ -5,8 +5,6 @@
 
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { useAuth } from '../context/AuthContext';
-import { getBackendStatusPresentation } from '../lib/backendStatus';
 import { formatMoney, formatPercent, formatTimestamp, modeLabel } from '../lib/tradeFormatting';
 import {
   Activity,
@@ -21,11 +19,18 @@ import {
 } from 'lucide-react';
 
 function stateMessage(state: string, error: string | null): string | null {
-  if (state === 'loading' || state === 'idle') return 'Loading canonical backend summary…';
+  if (state === 'loading' || state === 'idle') return 'Waking and loading the backend. Free instances can take up to 75 seconds…';
   if (state === 'unauthorized') return 'Unauthorized session. Sign in again with the private access token.';
   if (state === 'disconnected') return error || 'Canonical backend is unreachable.';
   if (state === 'backend_error') return error || 'Backend returned an error.';
   return null;
+}
+
+function connectionPresentation(state: string) {
+  if (state === 'ready') return { label: 'CONNECTED', dotClass: 'bg-emerald-400' };
+  if (state === 'loading' || state === 'idle') return { label: 'WAKING', dotClass: 'bg-amber-400 animate-pulse' };
+  if (state === 'unauthorized') return { label: 'UNAUTHORIZED', dotClass: 'bg-amber-400' };
+  return { label: 'DISCONNECTED', dotClass: 'bg-rose-400' };
 }
 
 function StatCard({ label, value, detail, icon: Icon }: {
@@ -50,8 +55,6 @@ function StatCard({ label, value, detail, icon: Icon }: {
 }
 
 export default function Dashboard() {
-  const { connectionStatus } = useAuth();
-  const backendStatus = getBackendStatusPresentation(connectionStatus);
   const {
     dashboardData,
     dashboardState,
@@ -62,6 +65,7 @@ export default function Dashboard() {
   } = useApp();
 
   const message = stateMessage(dashboardState, dashboardError);
+  const backendStatus = connectionPresentation(dashboardState);
   const summary = dashboardData?.today_summary;
   const account = dashboardData?.account;
   const activePreview = activeTradesData?.active_trades.slice(0, 5) || [];
@@ -80,7 +84,7 @@ export default function Dashboard() {
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 text-[10px] uppercase font-mono px-2.5 py-1.5 bg-slate-800/80 rounded border border-slate-700/50 text-slate-300">
             <span className={`h-2 w-2 rounded-full ${backendStatus.dotClass}`} />
-            FASTAPI: {backendStatus.label.toUpperCase()}
+            FASTAPI: {backendStatus.label}
           </div>
           <button type="button" onClick={() => void refresh()} disabled={dashboardState === 'loading'} className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-medium px-3 py-1.5 rounded border border-slate-700/60 transition-colors">
             <RefreshCw className={`h-3.5 w-3.5 text-emerald-400 ${dashboardState === 'loading' ? 'animate-spin' : ''}`} />
