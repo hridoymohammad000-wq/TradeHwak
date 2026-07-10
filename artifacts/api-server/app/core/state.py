@@ -5,8 +5,8 @@ from app.services.dashboard_service import DashboardService
 from app.services.engine_service import EngineService
 from app.services.managed_auto_trade_service import ManagedAutoTradeService
 from app.services.managed_bybit_service import ManagedBybitService
+from app.services.managed_manual_trade_service import ManagedManualTradeService
 from app.services.managed_strategy_service import ManagedStrategyService
-from app.services.manual_trade_service import ManualTradeService
 from app.services.profit_tracking_service import ProfitTrackingService
 from app.services.risk_execution_guard import RiskExecutionGuard
 from app.services.scanner_service import ScannerService
@@ -40,7 +40,7 @@ trade_service = TradeService(
 )
 profit_tracking_service = ProfitTrackingService(repository=persistence_repository)
 risk_execution_guard = RiskExecutionGuard()
-manual_trade_service = ManualTradeService(
+manual_trade_service = ManagedManualTradeService(
     settings_service=settings_service,
     bybit_service=bybit_service,
     trade_service=trade_service,
