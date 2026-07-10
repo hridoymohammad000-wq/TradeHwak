@@ -3,12 +3,19 @@ import { BarChart3, RefreshCw, Filter, Target, AlertTriangle } from 'lucide-reac
 import { ApiError, fetchCanonicalJournal } from '../api/client';
 import { CanonicalClosedTrade, DateTimeRange, JournalSummaryMetric } from '../api/types';
 
-function localDayRange(): DateTimeRange {
-  const start = new Date();
+function defaultPerformanceRange(): DateTimeRange {
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  const start = new Date(end);
+  start.setDate(start.getDate() - 29);
   start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
   return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function toDateTimeLocal(isoValue: string): string {
+  const date = new Date(isoValue);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 function formatNumber(value: number | null, digits = 2): string {
@@ -31,7 +38,7 @@ function MetricCard({ title, metric }: { title: string; metric: JournalSummaryMe
 }
 
 export default function PerformanceStrategy() {
-  const initialRange = useMemo(localDayRange, []);
+  const initialRange = useMemo(defaultPerformanceRange, []);
   const [range, setRange] = useState<DateTimeRange>(initialRange);
   const [trades, setTrades] = useState<CanonicalClosedTrade[]>([]);
   const [summaries, setSummaries] = useState<{
@@ -44,11 +51,11 @@ export default function PerformanceStrategy() {
   const [state, setState] = useState<'loading' | 'ready' | 'empty' | 'error' | 'unauthorized'>('loading');
   const [error, setError] = useState('');
 
-  const load = async () => {
+  const load = async (requestedRange: DateTimeRange = range) => {
     setState('loading');
     setError('');
     try {
-      const data = await fetchCanonicalJournal(range);
+      const data = await fetchCanonicalJournal(requestedRange);
       setTrades(data.closed_trades);
       setSummaries(data.summaries);
       setState(data.closed_trades.length ? 'ready' : 'empty');
@@ -60,7 +67,7 @@ export default function PerformanceStrategy() {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(initialRange); }, []);
 
   const filteredTrades = trades.filter((trade) => {
     if (mode === 'all') return true;
@@ -76,40 +83,45 @@ export default function PerformanceStrategy() {
             <h1 className="text-xl font-bold text-white flex items-center gap-2"><BarChart3 className="text-emerald-400" />Performance & Strategy</h1>
             <p className="text-xs text-slate-400 mt-1">Derived only from the same persisted closed trades used by Operator Journal.</p>
           </div>
-          <button onClick={() => void load()} className="px-3 py-2 rounded-lg bg-emerald-500 text-slate-950 text-xs font-bold flex items-center gap-2"><RefreshCw className="h-4 w-4" />Refresh</button>
+          <button onClick={() => void load()} disabled={state === 'loading'} className="px-3 py-2 rounded-lg bg-emerald-500 text-slate-950 text-xs font-bold flex items-center gap-2 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${state === 'loading' ? 'animate-spin' : ''}`} />Refresh</button>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
           <input
             type="datetime-local"
+            value={toDateTimeLocal(range.start)}
             className="bg-slate-950 border border-slate-700 rounded p-2 text-xs"
-            onChange={(event) => setRange((current) => ({ ...current, start: event.target.value ? new Date(event.target.value).toISOString() : initialRange.start }))}
+            onChange={(event) => event.target.value && setRange((current) => ({ ...current, start: new Date(event.target.value).toISOString() }))}
           />
           <input
             type="datetime-local"
+            value={toDateTimeLocal(range.end)}
             className="bg-slate-950 border border-slate-700 rounded p-2 text-xs"
-            onChange={(event) => setRange((current) => ({ ...current, end: event.target.value ? new Date(event.target.value).toISOString() : initialRange.end }))}
+            onChange={(event) => event.target.value && setRange((current) => ({ ...current, end: new Date(event.target.value).toISOString() }))}
           />
           <select className="bg-slate-950 border border-slate-700 rounded p-2 text-xs" value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}>
             <option value="all">All modes</option><option value="scalping">Scalping</option><option value="intraday">Intraday</option><option value="unknown">Unknown</option>
           </select>
-          <button onClick={() => void load()} className="bg-slate-800 border border-slate-700 rounded p-2 text-xs font-bold flex items-center justify-center gap-2"><Filter className="h-4 w-4" />Apply range</button>
+          <button onClick={() => void load()} disabled={state === 'loading'} className="bg-slate-800 border border-slate-700 rounded p-2 text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-50"><Filter className="h-4 w-4" />Apply range</button>
         </div>
 
         {state === 'loading' && <div className="p-10 text-center text-slate-400">Loading persisted performance data…</div>}
         {state === 'unauthorized' && <div className="p-10 text-center text-amber-400">Unauthorized session.</div>}
         {state === 'error' && <div className="p-10 text-center text-rose-400">{error}</div>}
-        {state === 'empty' && <div className="p-10 text-center text-slate-400">No persisted closed trades match this range.</div>}
 
-        {summaries && state === 'ready' && (
+        {summaries && state !== 'loading' && state !== 'error' && state !== 'unauthorized' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <MetricCard title="Scalping" metric={summaries.scalping} />
+            <MetricCard title="Intraday" metric={summaries.intraday} />
+            <MetricCard title="Unknown" metric={summaries.unknown} />
+            <MetricCard title="Combined" metric={summaries.combined} />
+          </div>
+        )}
+
+        {state === 'empty' && <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-10 text-center text-slate-400">No persisted closed trades match the selected 30-day range.</div>}
+
+        {state === 'ready' && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <MetricCard title="Scalping" metric={summaries.scalping} />
-              <MetricCard title="Intraday" metric={summaries.intraday} />
-              <MetricCard title="Unknown" metric={summaries.unknown} />
-              <MetricCard title="Combined" metric={summaries.combined} />
-            </div>
-
             <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
               <div className="p-4 border-b border-slate-800 font-bold text-sm flex items-center gap-2"><Target className="h-4 w-4 text-emerald-400" />Trade Outcome Analysis</div>
               <div className="overflow-x-auto">
