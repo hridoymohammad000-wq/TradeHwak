@@ -12,7 +12,7 @@ class NotificationSettingsModel(BaseModel):
 
 class TradingSettingsModel(BaseModel):
     system_mode: RuntimeMode = RuntimeMode.DEMO
-    active_strategy_mode: TradingMode = RuntimeMode.DEMO and TradingMode.SCALPING
+    active_strategy_mode: TradingMode = TradingMode.SCALPING
     scalping_engine_enabled: bool = False
     intraday_engine_enabled: bool = False
     auto_trade_enabled: bool = False
