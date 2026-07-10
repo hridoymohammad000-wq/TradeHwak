@@ -197,6 +197,4 @@ class SettingsService:
             return "Enable at least one trading engine before auto trade can run."
         if settings.risk_per_trade_pct <= 0:
             return "Set risk per trade above 0% before enabling auto trade."
-        if settings.daily_max_trades <= 0:
-            return "Set daily max trades above 0 before enabling auto trade."
         return None
