@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 try:
     import psycopg
     from psycopg.rows import dict_row
-except ImportError:  # Local fallback remains usable before optional DB deps are installed.
+except ImportError:
     psycopg = None
     dict_row = None
 
@@ -23,7 +23,6 @@ class PersistenceRepository:
         self.database_url = (database_url or "").strip()
         self.enabled = bool(self.database_url and psycopg is not None)
         self.last_error: str | None = None
-
         if self.database_url and psycopg is None:
             self.last_error = "DATABASE_URL is set but psycopg is not installed."
             logger.warning(self.last_error)
@@ -46,103 +45,84 @@ class PersistenceRepository:
         return self._json_value(row.get("settings")) if row else None
 
     def save_settings(self, settings: dict[str, Any]) -> None:
-        self._execute(
-            """
+        self._execute("""
             INSERT INTO bot_settings (id, settings, updated_at)
             VALUES (1, %s::jsonb, now())
             ON CONFLICT (id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()
-            """,
-            (self._json(settings),),
-        )
+        """, (self._json(settings),))
 
     def load_trade_state(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        rows = self._fetchall(
-            "SELECT payload, status FROM trade_history ORDER BY created_at ASC"
-        )
-        active: list[dict[str, Any]] = []
-        closed: list[dict[str, Any]] = []
+        rows = self._fetchall("SELECT payload, status FROM trade_history ORDER BY created_at ASC")
+        active, closed = [], []
         for row in rows:
             payload = self._json_value(row.get("payload")) or {}
-            if row.get("status") == "closed":
-                closed.append(payload)
-            else:
-                active.append(payload)
+            (closed if row.get("status") == "closed" else active).append(payload)
         return active, closed
 
     def upsert_trade(self, trade_key: str, status: str, payload: dict[str, Any]) -> None:
-        self._execute(
-            """
+        self._execute("""
             INSERT INTO trade_history (trade_key, status, payload, updated_at)
             VALUES (%s, %s, %s::jsonb, now())
             ON CONFLICT (trade_key) DO UPDATE
             SET status = EXCLUDED.status, payload = EXCLUDED.payload, updated_at = now()
-            """,
-            (trade_key, status, self._json(payload)),
-        )
+        """, (trade_key, status, self._json(payload)))
 
     def save_journal_entry(self, trade_key: str, payload: dict[str, Any]) -> None:
-        self._execute(
-            """
+        self._execute("""
             INSERT INTO journal (trade_key, payload, created_at)
             VALUES (%s, %s::jsonb, now())
             ON CONFLICT (trade_key) DO UPDATE SET payload = EXCLUDED.payload
-            """,
-            (trade_key, self._json(payload)),
-        )
+        """, (trade_key, self._json(payload)))
 
     def load_executed_signal_ids(self, trade_day: date) -> set[str]:
-        rows = self._fetchall(
-            "SELECT signal_id FROM executed_signal_ids WHERE trade_day = %s",
-            (trade_day,),
-        )
+        rows = self._fetchall("SELECT signal_id FROM executed_signal_ids WHERE trade_day = %s", (trade_day,))
         return {str(row["signal_id"]) for row in rows}
 
     def save_executed_signal_id(self, signal_id: str, trade_day: date) -> None:
-        self._execute(
-            """
+        self._execute("""
             INSERT INTO executed_signal_ids (signal_id, trade_day)
             VALUES (%s, %s)
             ON CONFLICT (signal_id, trade_day) DO NOTHING
-            """,
-            (signal_id, trade_day),
-        )
+        """, (signal_id, trade_day))
 
     def load_profit_tracking_state(self) -> dict[str, Any] | None:
         row = self._fetchone("SELECT state FROM profit_tracking_state WHERE id = 1")
         return self._json_value(row.get("state")) if row else None
 
     def save_profit_tracking_state(self, state: dict[str, Any]) -> None:
-        self._execute(
-            """
+        self._execute("""
             INSERT INTO profit_tracking_state (id, state, updated_at)
             VALUES (1, %s::jsonb, now())
             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
-            """,
-            (self._json(state),),
-        )
+        """, (self._json(state),))
+
+    def load_trade_management_state(self) -> dict[str, Any] | None:
+        row = self._fetchone("SELECT state FROM trade_management_state WHERE id = 1")
+        return self._json_value(row.get("state")) if row else None
+
+    def save_trade_management_state(self, state: dict[str, Any]) -> None:
+        self._execute("""
+            INSERT INTO trade_management_state (id, state, updated_at)
+            VALUES (1, %s::jsonb, now())
+            ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+        """, (self._json(state),))
 
     def load_workflow_state(self) -> dict[str, Any] | None:
         row = self._fetchone("SELECT state FROM workflow_state WHERE id = 1")
         return self._json_value(row.get("state")) if row else None
 
     def save_workflow_state(self, state: dict[str, Any]) -> None:
-        self._execute(
-            """
+        self._execute("""
             INSERT INTO workflow_state (id, state, updated_at)
             VALUES (1, %s::jsonb, now())
             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
-            """,
-            (self._json(state),),
-        )
+        """, (self._json(state),))
 
     def append_log(self, table: str, event_type: str, payload: dict[str, Any]) -> None:
         allowed = {"scan_logs", "signal_logs", "execution_logs"}
         if table not in allowed:
             raise ValueError(f"Unsupported log table: {table}")
-        self._execute(
-            f"INSERT INTO {table} (event_type, payload) VALUES (%s, %s::jsonb)",
-            (event_type, self._json(payload)),
-        )
+        self._execute(f"INSERT INTO {table} (event_type, payload) VALUES (%s, %s::jsonb)", (event_type, self._json(payload)))
 
     def _connect(self):
         if not self.enabled or psycopg is None:
