@@ -42,11 +42,13 @@ class TrailingStopService:
                 continue
 
             try:
+                original_risk = self._original_risk_distance(trade)
                 new_stop = self._candidate_stop(
                     direction=trade.direction,
                     entry_price=Decimal(str(trade.entry_price)),
                     current_price=Decimal(str(trade.current_price)),
                     old_stop=Decimal(str(trade.stop_loss)),
+                    original_risk=original_risk,
                 )
             except (InvalidOperation, ValueError):
                 skipped += 1
@@ -96,18 +98,26 @@ class TrailingStopService:
         return {"updated": updated, "skipped": skipped, "failed": failed}
 
     @staticmethod
+    def _original_risk_distance(trade) -> Decimal:
+        try:
+            planned_risk = Decimal(str(trade.planned_risk_usdt))
+            qty = Decimal(str(trade.qty))
+            if planned_risk > 0 and qty > 0:
+                return planned_risk / qty
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+        return abs(Decimal(str(trade.entry_price)) - Decimal(str(trade.stop_loss)))
+
+    @staticmethod
     def _candidate_stop(
         *,
         direction: Direction,
         entry_price: Decimal,
         current_price: Decimal,
         old_stop: Decimal,
+        original_risk: Decimal,
     ) -> Decimal | None:
-        if entry_price <= 0 or current_price <= 0 or old_stop <= 0:
-            return None
-
-        original_risk = abs(entry_price - old_stop)
-        if original_risk <= 0:
+        if entry_price <= 0 or current_price <= 0 or old_stop <= 0 or original_risk <= 0:
             return None
 
         if direction == Direction.BUY:
