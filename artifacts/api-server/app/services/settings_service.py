@@ -193,14 +193,8 @@ class SettingsService:
             return "Auto trade is off."
         if settings.system_mode != RuntimeMode.DEMO:
             return "System mode must be demo before auto trade can run."
-
-        selected_engine_enabled = (
-            settings.scalping_engine_enabled
-            if settings.active_strategy_mode == TradingMode.SCALPING
-            else settings.intraday_engine_enabled
-        )
-        if not selected_engine_enabled:
-            return f"{settings.active_strategy_mode.value.title()} engine is disabled."
+        if not settings.scalping_engine_enabled and not settings.intraday_engine_enabled:
+            return "Enable at least one trading engine before auto trade can run."
         if settings.risk_per_trade_pct <= 0:
             return "Set risk per trade above 0% before enabling auto trade."
         if settings.max_open_positions <= 0:
