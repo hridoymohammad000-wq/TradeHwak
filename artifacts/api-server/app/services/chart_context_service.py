@@ -1,100 +1,166 @@
+from datetime import datetime, timezone
+
 from fastapi import HTTPException, status
 
 from app.core.enums import ChartStatus, Timeframe, TradingMode
 from app.schemas.chart_context import (
+    ChartCandle,
     ChartContextData,
     ChartContextResponse,
     IndicatorContext,
 )
+from app.services.bybit_service import BybitService
 
 
 class ChartContextService:
+    _INTERVALS = {
+        Timeframe.M1: "1",
+        Timeframe.M5: "5",
+        Timeframe.M15: "15",
+        Timeframe.H1: "60",
+    }
+
+    def __init__(self, bybit_service: BybitService) -> None:
+        self._bybit_service = bybit_service
+
     def get_context(
         self, symbol: str, mode: TradingMode, timeframe: Timeframe | None
     ) -> ChartContextResponse:
-        normalized_symbol = symbol.strip().upper()
+        normalized_symbol = symbol.strip().upper().replace("/", "")
         if not normalized_symbol:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Symbol must not be blank.",
             )
 
-        symbol_profiles: dict[str, dict[str, float]] = {
-            "BTCUSDT": {
-                "entry_price": 108420.0,
-                "stop_loss": 108120.0,
-                "take_profit": 109020.0,
-                "ema20": 108332.4,
-                "ema50": 108190.7,
-                "ema200": 107844.2,
-                "rsi": 61.8,
-            },
-            "ETHUSDT": {
-                "entry_price": 6038.5,
-                "stop_loss": 6074.0,
-                "take_profit": 5964.0,
-                "ema20": 6041.3,
-                "ema50": 6058.8,
-                "ema200": 5987.5,
-                "rsi": 46.2,
-            },
-            "SOLUSDT": {
-                "entry_price": 187.3,
-                "stop_loss": 183.6,
-                "take_profit": 194.7,
-                "ema20": 186.8,
-                "ema50": 184.9,
-                "ema200": 179.4,
-                "rsi": 58.1,
-            },
-            "XRPUSDT": {
-                "entry_price": 0.9142,
-                "stop_loss": 0.9228,
-                "take_profit": 0.8971,
-                "ema20": 0.9131,
-                "ema50": 0.9165,
-                "ema200": 0.9044,
-                "rsi": 43.7,
-            },
-        }
+        selected_timeframe = timeframe or (
+            Timeframe.M5 if mode == TradingMode.SCALPING else Timeframe.M15
+        )
+        interval = self._INTERVALS[selected_timeframe]
+        payload = self._bybit_service._get_closed_klines(
+            normalized_symbol,
+            interval,
+            limit=260,
+        )
+        rows = list(reversed(payload.get("result", {}).get("list", []) or []))
 
-        profile = symbol_profiles.get(normalized_symbol)
-        if profile is None:
+        candles: list[ChartCandle] = []
+        for row in rows:
+            try:
+                candles.append(
+                    ChartCandle(
+                        open_time=int(row[0]),
+                        open=float(row[1]),
+                        high=float(row[2]),
+                        low=float(row[3]),
+                        close=float(row[4]),
+                        volume=float(row[5]) if row[5] not in (None, "") else None,
+                        turnover=float(row[6]) if len(row) > 6 and row[6] not in (None, "") else None,
+                    )
+                )
+            except (TypeError, ValueError, IndexError):
+                continue
+
+        if not candles:
             return ChartContextResponse(
-                message="Chart context fetched successfully.",
+                message="No closed candles are currently available.",
                 data=ChartContextData(
                     symbol=normalized_symbol,
                     mode=mode,
-                    timeframe=timeframe,
+                    timeframe=selected_timeframe,
                     chart_status=ChartStatus.PENDING_DATA,
-                    entry_price=None,
-                    stop_loss=None,
-                    take_profit=None,
-                    risk_reward=None,
+                    candles=[],
+                    last_price=None,
+                    fetched_at=datetime.now(timezone.utc).isoformat(),
                     indicator_context=IndicatorContext(),
                 ),
             )
 
-        risk = abs(profile["entry_price"] - profile["stop_loss"])
-        reward = abs(profile["take_profit"] - profile["entry_price"])
-        risk_reward = round(reward / risk, 2) if risk else None
+        closes = [item.close for item in candles]
+        ema20_series = self._ema_series(closes, 20)
+        ema50_series = self._ema_series(closes, 50)
+        ema200_series = self._ema_series(closes, 200)
+        macd_value, macd_signal = self._macd(closes)
 
         return ChartContextResponse(
             message="Chart context fetched successfully.",
             data=ChartContextData(
                 symbol=normalized_symbol,
                 mode=mode,
-                timeframe=timeframe,
+                timeframe=selected_timeframe,
                 chart_status=ChartStatus.CONTEXT_READY,
-                entry_price=profile["entry_price"],
-                stop_loss=profile["stop_loss"],
-                take_profit=profile["take_profit"],
-                risk_reward=risk_reward,
+                candles=candles,
+                last_price=candles[-1].close,
+                fetched_at=datetime.now(timezone.utc).isoformat(),
                 indicator_context=IndicatorContext(
-                    ema20=profile["ema20"],
-                    ema50=profile["ema50"],
-                    ema200=profile["ema200"],
-                    rsi=profile["rsi"],
+                    ema20=self._last(ema20_series),
+                    ema50=self._last(ema50_series),
+                    ema200=self._last(ema200_series),
+                    rsi=self._rsi(closes, 14),
+                    macd=macd_value,
+                    macd_signal=macd_signal,
                 ),
             ),
         )
+
+    @staticmethod
+    def _ema_series(values: list[float], period: int) -> list[float]:
+        if len(values) < period:
+            return []
+        multiplier = 2 / (period + 1)
+        ema = sum(values[:period]) / period
+        result = [ema]
+        for item in values[period:]:
+            ema = (item - ema) * multiplier + ema
+            result.append(ema)
+        return result
+
+    @staticmethod
+    def _last(values: list[float]) -> float | None:
+        return round(values[-1], 8) if values else None
+
+    @staticmethod
+    def _rsi(values: list[float], period: int) -> float | None:
+        if len(values) <= period:
+            return None
+        gains: list[float] = []
+        losses: list[float] = []
+        for index in range(1, len(values)):
+            delta = values[index] - values[index - 1]
+            gains.append(max(delta, 0.0))
+            losses.append(abs(min(delta, 0.0)))
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+        for index in range(period, len(gains)):
+            avg_gain = ((avg_gain * (period - 1)) + gains[index]) / period
+            avg_loss = ((avg_loss * (period - 1)) + losses[index]) / period
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return round(100 - (100 / (1 + rs)), 2)
+
+    @classmethod
+    def _macd(cls, values: list[float]) -> tuple[float | None, float | None]:
+        if len(values) < 35:
+            return None, None
+        fast = cls._ema_aligned(values, 12)
+        slow = cls._ema_aligned(values, 26)
+        offset = len(fast) - len(slow)
+        macd_series = [fast[index + offset] - slow[index] for index in range(len(slow))]
+        signal_series = cls._ema_series(macd_series, 9)
+        return (
+            round(macd_series[-1], 8) if macd_series else None,
+            round(signal_series[-1], 8) if signal_series else None,
+        )
+
+    @staticmethod
+    def _ema_aligned(values: list[float], period: int) -> list[float]:
+        if len(values) < period:
+            return []
+        multiplier = 2 / (period + 1)
+        ema = sum(values[:period]) / period
+        result = [ema]
+        for item in values[period:]:
+            ema = (item - ema) * multiplier + ema
+            result.append(ema)
+        return result
