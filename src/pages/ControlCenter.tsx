@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Save, Server, Power, RefreshCw, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Save, Server, Power, RefreshCw, ShieldCheck, AlertTriangle, Play, Square } from 'lucide-react';
 import { ApiError, apiRequest, getBackendBaseUrl, updateEngineControls } from '../api/client';
 import { BackendGrade, TradingMode } from '../api/types';
 import { useAuth } from '../context/AuthContext';
@@ -88,7 +88,7 @@ export default function ControlCenter() {
   };
 
   const control = async (
-    key: 'scalping_engine_enabled' | 'intraday_engine_enabled' | 'auto_trade_enabled' | 'emergency_stop',
+    key: 'scalping_engine_enabled' | 'intraday_engine_enabled' | 'emergency_stop',
     value: boolean,
   ) => {
     setMessage('');
@@ -98,6 +98,22 @@ export default function ControlCenter() {
     } catch (error) {
       setState(classify(error));
       setMessage(error instanceof Error ? error.message : 'Control action failed.');
+    }
+  };
+
+  const botAction = async (action: 'start' | 'stop') => {
+    setState('saving');
+    setMessage('');
+    try {
+      await apiRequest(`/api/bot/${action}`, { method: 'POST' });
+      await load();
+      setState('saved');
+      setMessage(action === 'start'
+        ? 'Bot started: immediate scan → signal → risk → execution → management cycle completed.'
+        : 'Auto trading stopped. Existing positions were not modified.');
+    } catch (error) {
+      setState(classify(error));
+      setMessage(error instanceof Error ? error.message : `Unable to ${action} bot.`);
     }
   };
 
@@ -137,7 +153,7 @@ export default function ControlCenter() {
       <div className="bg-slate-900 border border-slate-850 rounded-xl p-5 flex justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-white">Control Center</h1>
-          <p className="text-xs text-slate-400 mt-1">One canonical backend state for mode, engines, risk and execution readiness.</p>
+          <p className="text-xs text-slate-400 mt-1">Manual scan stays scan-only. Start Bot owns the full automatic workflow.</p>
         </div>
         <button onClick={() => void load()} className="px-3 py-2 bg-slate-800 text-white rounded-lg text-xs flex gap-2"><RefreshCw className="h-4 w-4" />Reload</button>
       </div>
@@ -183,7 +199,6 @@ export default function ControlCenter() {
               {([
                 ['scalping_engine_enabled', 'Scalping Engine', settings.engine_control.scalping_engine_enabled],
                 ['intraday_engine_enabled', 'Intraday Engine', settings.engine_control.intraday_engine_enabled],
-                ['auto_trade_enabled', 'Auto Trade', settings.execution_control.auto_trade_enabled],
                 ['emergency_stop', 'Emergency Stop', settings.execution_control.emergency_stop],
               ] as const).map(([key, label, checked]) => (
                 <label key={key} className="mt-4 flex justify-between text-sm text-slate-300">
@@ -191,6 +206,26 @@ export default function ControlCenter() {
                   <input type="checkbox" checked={checked} onChange={(event) => void control(key, event.target.checked)} />
                 </label>
               ))}
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => void botAction('start')}
+                  disabled={state === 'saving' || Boolean(workflow?.auto_trade_enabled)}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-3 text-sm font-black text-slate-950 disabled:opacity-50"
+                >
+                  <Play className="h-4 w-4" /> Start Bot
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void botAction('stop')}
+                  disabled={state === 'saving' || !workflow?.auto_trade_enabled}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
+                >
+                  <Square className="h-4 w-4" /> Stop Bot
+                </button>
+              </div>
+
               <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
                 Selected engine: <span className={selectedEngineEnabled ? 'text-emerald-400' : 'text-amber-400'}>{mode} {selectedEngineEnabled ? 'enabled' : 'disabled'}</span>
               </div>
