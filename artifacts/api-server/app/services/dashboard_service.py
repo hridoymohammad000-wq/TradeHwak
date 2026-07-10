@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from app.core.enums import SystemStatus, TradingMode
+from app.core.trading_clock import is_on_trading_date, trading_date
 from app.schemas.dashboard import (
     DashboardAccount,
     DashboardEvent,
@@ -26,10 +27,6 @@ class DashboardService:
         self._trade_service = trade_service
         self._bybit_service = bybit_service
 
-    @staticmethod
-    def _today_prefix() -> str:
-        return datetime.now(timezone.utc).date().isoformat()
-
     def get_summary(self) -> DashboardSummaryResponse:
         settings = self._settings_service.get_settings_state()
         self._trade_service.sync_with_exchange(self._bybit_service)
@@ -43,10 +40,10 @@ class DashboardService:
         unrealized_values = [trade.pnl for trade in active_records if trade.pnl is not None]
         unrealized_pnl = sum(unrealized_values) if unrealized_values else None
 
-        today_prefix = self._today_prefix()
+        today = trading_date()
         closed_today = [
             trade for trade in closed_records
-            if (trade.closed_time or "").startswith(today_prefix)
+            if is_on_trading_date(trade.closed_time, today)
         ]
         wins = sum(1 for trade in closed_today if trade.result == "win")
         losses = sum(1 for trade in closed_today if trade.result == "loss")
