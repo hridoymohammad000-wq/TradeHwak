@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from fastapi import HTTPException
 
 from app.core.enums import Direction, Timeframe, TradingMode
+from app.core.trading_clock import is_on_trading_date, trading_date, trading_now
 from app.db.repository import PersistenceRepository
 from app.schemas.trades import (
     ActiveTradeRecord,
@@ -50,7 +51,7 @@ class TradeService:
         self._active_trades: list[ManagedTrade] = []
         self._closed_trades: list[ClosedTradeRecord] = []
         self._executed_signal_ids: set[str] = set()
-        self._trade_day = date.today()
+        self._trade_day = trading_date()
         self._daily_trade_count = 0
 
     def reload_from_persistence(self) -> None:
@@ -115,11 +116,10 @@ class TradeService:
             for trade in self._active_trades
             if trade.mode == TradingMode.INTRADAY
         ]
-        today_prefix = self._trade_day.isoformat()
         closed_today = sum(
             1
             for trade in self._closed_trades
-            if (trade.closed_time or "").startswith(today_prefix)
+            if is_on_trading_date(trade.closed_time, self._trade_day)
         )
 
         return ActiveTradesResponse(
@@ -163,7 +163,7 @@ class TradeService:
     ) -> None:
         self._ensure_current_day()
         existing_index = self._find_active_index(symbol, mode)
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = trading_now().astimezone(timezone.utc).isoformat()
         trade_record = ManagedTrade(
             symbol=symbol,
             mode=mode,
@@ -252,7 +252,6 @@ class TradeService:
                     self._repository.save_journal_entry(trade_key, closed_payload)
                 continue
 
-            # A newly submitted order may not be visible in position/closed-PnL immediately.
             self._persist_active_trade(trade)
             remaining_active.append(trade)
 
@@ -285,7 +284,7 @@ class TradeService:
         return signal_id in self._executed_signal_ids
 
     def _ensure_current_day(self) -> None:
-        today = date.today()
+        today = trading_date()
         if today == self._trade_day:
             return
         self._trade_day = today
@@ -294,20 +293,20 @@ class TradeService:
             if self._repository is not None
             else set()
         )
-        # Active and historical trades must survive a date rollover.
         self._recalculate_daily_trade_count()
 
     def _recalculate_daily_trade_count(self) -> None:
-        prefix = self._trade_day.isoformat()
-        self._daily_trade_count = sum(
+        active_count = sum(
             1
             for trade in self._active_trades
-            if (trade.opened_at or "").startswith(prefix)
-        ) + sum(
+            if is_on_trading_date(trade.opened_at, self._trade_day)
+        )
+        closed_count = sum(
             1
             for trade in self._closed_trades
-            if (trade.closed_time or "").startswith(prefix)
+            if is_on_trading_date(trade.opened_at, self._trade_day)
         )
+        self._daily_trade_count = active_count + closed_count
 
     def _find_active_index(self, symbol: str, mode: TradingMode) -> int | None:
         return next(
@@ -329,7 +328,7 @@ class TradeService:
         timeframe_value = timeframe.value if timeframe is not None else "na"
         return (
             f"sig-{symbol.lower()}-{timeframe_value.lower()}-{direction.value}-"
-            f"{datetime.now(timezone.utc).date().isoformat()}"
+            f"{trading_date().isoformat()}"
         )
 
     @staticmethod
@@ -473,6 +472,7 @@ class TradeService:
             close_reason=close_reason,
             exit_analysis=exit_analysis,
             timeframe=trade.timeframe,
+            opened_at=trade.opened_at,
             closed_time=updated_time,
         )
 
@@ -502,9 +502,7 @@ class TradeService:
             return None
         if timestamp > 10_000_000_000:
             timestamp = timestamp / 1000
-        return datetime.fromtimestamp(timestamp, timezone.utc).strftime(
-            "%Y-%m-%d %H:%M"
-        )
+        return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
 
     @staticmethod
     def _resolve_close_analysis(
