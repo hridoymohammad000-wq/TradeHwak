@@ -9,7 +9,9 @@ from app.services.strategy_service import StrategySignal
 
 
 class SignalRegistry:
-    """Process-wide source of the latest evaluated strategy signals."""
+    """Process-wide source of the latest ranked executable strategy signals."""
+
+    MAX_SIGNALS_PER_MODE = 10
 
     def __init__(self, repository: PersistenceRepository | None = None) -> None:
         self._repository = repository
@@ -17,10 +19,23 @@ class SignalRegistry:
         self._signals: dict[TradingMode, list[StrategySignal]] = {}
         self._updated_at: dict[TradingMode, str] = {}
 
+    @staticmethod
+    def _score(signal: StrategySignal) -> float:
+        try:
+            return float(signal.metrics.get("final_score", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            return 0.0
+
     def replace(self, mode: TradingMode, signals: list[StrategySignal], source: str) -> None:
+        ranked = sorted(
+            signals,
+            key=lambda signal: (self._score(signal), signal.symbol),
+            reverse=True,
+        )[: self.MAX_SIGNALS_PER_MODE]
         timestamp = datetime.now(timezone.utc).isoformat()
+
         with self._lock:
-            self._signals[mode] = list(signals)
+            self._signals[mode] = ranked
             self._updated_at[mode] = timestamp
 
         if self._repository is not None:
@@ -30,10 +45,12 @@ class SignalRegistry:
                 {
                     "mode": mode.value,
                     "source": source,
-                    "count": len(signals),
+                    "evaluated_count": len(signals),
+                    "published_count": len(ranked),
                     "updated_at": timestamp,
                     "signals": [
                         {
+                            "rank": index,
                             "symbol": signal.symbol,
                             "direction": signal.direction.value,
                             "grade": signal.grade.value,
@@ -41,9 +58,10 @@ class SignalRegistry:
                             "status": signal.status,
                             "entry_price": signal.entry_price,
                             "current_price": signal.current_price,
+                            "score": self._score(signal),
                             "reason": signal.reason,
                         }
-                        for signal in signals
+                        for index, signal in enumerate(ranked, start=1)
                     ],
                 },
             )
