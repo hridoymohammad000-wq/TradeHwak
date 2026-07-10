@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 from fastapi import HTTPException
 
-from app.core.enums import Direction
+from app.core.enums import Direction, TradingMode
 from app.db.repository import PersistenceRepository
 from app.services.bybit_service import BybitService
 from app.services.trade_service import TradeService
@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 class TradeManagementService:
-    """Manage partial exits, break-even and one-way trailing stops.
+    """Manage mode-specific partial exits, break-even and one-way trailing stops.
 
-    TP1: at 1.5R close 50% of original quantity and move SL to entry.
-    TP2: at 2R close another 30% of original quantity and move SL to TP1 (1.5R).
-    Runner: retain 20% and trail by one original risk distance. Stops never loosen.
+    Scalping: TP1 at 1.5R closes 50%; TP2 at 2R closes 30%; 20% runner trails.
+    Intraday: TP1 at 2R closes 50%; TP2 at 3R closes 30%; 20% runner trails.
+    Stops never loosen.
     """
 
     def __init__(
@@ -83,9 +83,11 @@ class TradeManagementService:
         risk = self._original_risk_distance(trade, entry, old_stop, original_qty)
         if risk <= 0 or original_qty <= 0:
             return "skipped"
+
+        tp1_r, tp2_r = self._profit_targets(trade)
         r_multiple = self._r_multiple(trade.direction, entry, current, risk)
 
-        if r_multiple >= Decimal("1.5") and not state.get("tp1_done"):
+        if r_multiple >= tp1_r and not state.get("tp1_done"):
             self._submit_partial_close(trade, original_qty * Decimal("0.50"), "tp1", key)
             self._tighten_stop(trade, entry)
             state["tp1_done"] = True
@@ -93,12 +95,12 @@ class TradeManagementService:
             self._persist()
             return "tp1"
 
-        if r_multiple >= Decimal("2") and state.get("tp1_done") and not state.get("tp2_done"):
+        if r_multiple >= tp2_r and state.get("tp1_done") and not state.get("tp2_done"):
             self._submit_partial_close(trade, original_qty * Decimal("0.30"), "tp2", key)
             tp1_price = (
-                entry + risk * Decimal("1.5")
+                entry + risk * tp1_r
                 if trade.direction == Direction.BUY
-                else entry - risk * Decimal("1.5")
+                else entry - risk * tp1_r
             )
             self._tighten_stop(trade, tp1_price)
             state["tp2_done"] = True
@@ -106,7 +108,7 @@ class TradeManagementService:
             self._persist()
             return "tp2"
 
-        if state.get("tp2_done") and r_multiple >= Decimal("2"):
+        if state.get("tp2_done") and r_multiple >= tp2_r:
             candidate = current - risk if trade.direction == Direction.BUY else current + risk
             if self._strictly_improves(trade.direction, old_stop, candidate):
                 self._tighten_stop(trade, candidate)
@@ -114,6 +116,14 @@ class TradeManagementService:
                 self._persist()
                 return "trailed"
         return "skipped"
+
+    @staticmethod
+    def _profit_targets(trade) -> tuple[Decimal, Decimal]:
+        mode = getattr(trade, "mode", None)
+        mode_value = getattr(mode, "value", mode)
+        if mode == TradingMode.INTRADAY or mode_value == TradingMode.INTRADAY.value:
+            return Decimal("2"), Decimal("3")
+        return Decimal("1.5"), Decimal("2")
 
     def _submit_partial_close(self, trade, requested_qty: Decimal, stage: str, key: str) -> None:
         instrument = self._bybit_service.get_validated_symbol(trade.symbol)["instrument"]
