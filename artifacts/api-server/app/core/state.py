@@ -7,6 +7,7 @@ from app.services.engine_service import EngineService
 from app.services.managed_auto_trade_service import ManagedAutoTradeService
 from app.services.manual_trade_service import ManualTradeService
 from app.services.profit_tracking_service import ProfitTrackingService
+from app.services.risk_execution_guard import RiskExecutionGuard
 from app.services.scanner_service import ScannerService
 from app.services.settings_service import SettingsService
 from app.services.signal_registry import SignalRegistry
@@ -38,11 +39,14 @@ trade_service = TradeService(
     repository=persistence_repository,
 )
 profit_tracking_service = ProfitTrackingService(repository=persistence_repository)
+risk_execution_guard = RiskExecutionGuard()
 manual_trade_service = ManualTradeService(
     settings_service=settings_service,
     bybit_service=bybit_service,
     trade_service=trade_service,
     repository=persistence_repository,
+    profit_tracking_service=profit_tracking_service,
+    risk_execution_guard=risk_execution_guard,
 )
 trailing_stop_service = TrailingStopService(
     bybit_service=bybit_service,
