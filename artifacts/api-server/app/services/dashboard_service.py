@@ -50,7 +50,12 @@ class DashboardService:
             if is_on_trading_date(trade.closed_time, today)
         ]
         opened_today_ids = {
-            trade.trade_id
+            (
+                trade.symbol,
+                trade.mode.value if hasattr(trade.mode, "value") else str(trade.mode),
+                trade.direction.value if hasattr(trade.direction, "value") else str(trade.direction),
+                trade.opened_at,
+            )
             for trade in [*active_records, *closed_records]
             if is_on_trading_date(trade.opened_at, today)
         }
