@@ -12,6 +12,12 @@ CREATE TABLE IF NOT EXISTS profit_tracking_state (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS trade_management_state (
+    id smallint PRIMARY KEY CHECK (id = 1),
+    state jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS workflow_state (
     id smallint PRIMARY KEY CHECK (id = 1),
     state jsonb NOT NULL DEFAULT '{}'::jsonb,

@@ -14,8 +14,8 @@ from app.services.signal_registry import SignalRegistry
 from app.services.signals_service import SignalsService
 from app.services.strategy_service import StrategyService
 from app.services.system_service import SystemService
+from app.services.trade_management_service import TradeManagementService
 from app.services.trade_service import TradeService
-from app.services.trailing_stop_service import TrailingStopService
 
 
 persistence_repository = PersistenceRepository(get_app_config().database_url)
@@ -48,9 +48,10 @@ manual_trade_service = ManualTradeService(
     profit_tracking_service=profit_tracking_service,
     risk_execution_guard=risk_execution_guard,
 )
-trailing_stop_service = TrailingStopService(
+trade_management_service = TradeManagementService(
     bybit_service=bybit_service,
     trade_service=trade_service,
+    repository=persistence_repository,
 )
 auto_trade_service = ManagedAutoTradeService(
     settings_service=settings_service,
@@ -60,7 +61,7 @@ auto_trade_service = ManagedAutoTradeService(
     trade_service=trade_service,
     signal_registry=signal_registry,
     repository=persistence_repository,
-    trailing_stop_service=trailing_stop_service,
+    trade_management_service=trade_management_service,
 )
 dashboard_service = DashboardService(
     settings_service=settings_service,
