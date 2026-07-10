@@ -12,6 +12,7 @@ class ManagedManualTradeService(ManualTradeService):
         TradingMode.SCALPING: 5,
         TradingMode.INTRADAY: 3,
     }
+    DEFAULT_OVERALL_OPEN_LIMIT = 5
 
     def execute_manual_trade(
         self,
@@ -49,13 +50,15 @@ class ManagedManualTradeService(ManualTradeService):
             )
 
         settings = self._settings_service.get_settings_state()
-        if len(active.scalping_trades) + len(active.intraday_trades) >= settings.max_open_positions:
+        overall_limit = (
+            settings.max_open_positions
+            if settings.max_open_positions > 0
+            else self.DEFAULT_OVERALL_OPEN_LIMIT
+        )
+        if len(active.scalping_trades) + len(active.intraday_trades) >= overall_limit:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"Overall open-position limit of "
-                    f"{settings.max_open_positions} reached."
-                ),
+                detail=f"Overall open-position limit of {overall_limit} reached.",
             )
 
         return super().execute_manual_trade(payload, signal_id=signal_id)
