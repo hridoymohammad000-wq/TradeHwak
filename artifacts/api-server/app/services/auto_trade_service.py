@@ -135,11 +135,6 @@ class AutoTradeService:
                     timeframe=signal.timeframe,
                     direction=signal.direction,
                 )
-                if self._trade_service.was_signal_executed(signal_id):
-                    self._last_reject_reason = (
-                        f"{signal.symbol} signal already executed today."
-                    )
-                    continue
 
                 try:
                     order = self._manual_trade_service.execute_strategy_trade(
