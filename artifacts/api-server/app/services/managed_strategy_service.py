@@ -1,9 +1,9 @@
 from app.core.enums import Direction, Timeframe, TradingMode
-from app.services.strategy_service import StrategyService, StrategySignal
+from app.services.strategy_service import Candle, StrategyService, StrategySignal
 
 
 class ManagedStrategyService(StrategyService):
-    """Top-20 liquid universe with mandatory lower-timeframe confirmation."""
+    """Top-20 liquid universe with confirmation and explicit strategy gates."""
 
     _TOP_VOLUME_LIMITS = {
         TradingMode.SCALPING: 20,
@@ -15,24 +15,12 @@ class ManagedStrategyService(StrategyService):
     }
     _FALLBACK_SYMBOLS = {
         TradingMode.SCALPING: [
-            "BTCUSDT",
-            "ETHUSDT",
-            "SOLUSDT",
-            "BNBUSDT",
-            "XRPUSDT",
-            "ADAUSDT",
-            "AVAXUSDT",
-            "LINKUSDT",
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
+            "XRPUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT",
         ],
         TradingMode.INTRADAY: [
-            "BTCUSDT",
-            "ETHUSDT",
-            "SOLUSDT",
-            "BNBUSDT",
-            "XRPUSDT",
-            "ADAUSDT",
-            "AVAXUSDT",
-            "LINKUSDT",
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
+            "XRPUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT",
         ],
     }
 
@@ -42,8 +30,6 @@ class ManagedStrategyService(StrategyService):
         mode: TradingMode,
         timeframe: Timeframe | None,
     ) -> StrategySignal | None:
-        # Signal setups are deliberately locked to the agreed mode timeframe:
-        # scalping = 5m setup, intraday = 15m setup.
         setup_timeframe = self.default_timeframe(mode)
         signal = super().evaluate_symbol(
             symbol=symbol,
@@ -51,6 +37,19 @@ class ManagedStrategyService(StrategyService):
             timeframe=setup_timeframe,
         )
         if signal is None:
+            return None
+
+        setup_candles = self._load_candles(
+            symbol,
+            self._INTERVAL_MAP[setup_timeframe],
+            240,
+        )
+        if len(setup_candles) < 60:
+            return None
+
+        matches = self._strategy_matches(setup_candles, signal.direction)
+        matched_names = [name for name, matched in matches.items() if matched]
+        if not matched_names:
             return None
 
         confirmation_timeframe = self._CONFIRMATION_TIMEFRAME[mode]
@@ -67,20 +66,119 @@ class ManagedStrategyService(StrategyService):
                 "confirmation_timeframe_minutes": float(
                     self._INTERVAL_MAP[confirmation_timeframe]
                 ),
-                "confirmation_rsi14": round(confirmation["rsi"], 2),
-                "confirmation_vwap": round(confirmation["vwap"], 8),
-                "confirmation_close": round(confirmation["close"], 8),
-                "confirmation_candle_direction": confirmation["candle_direction"],
-                "confirmation_rsi_aligned": confirmation["rsi_aligned"],
-                "confirmation_vwap_aligned": confirmation["vwap_aligned"],
+                "confirmation_rsi14": round(float(confirmation["rsi"]), 2),
+                "confirmation_vwap": round(float(confirmation["vwap"]), 8),
+                "confirmation_close": round(float(confirmation["close"]), 8),
+                "confirmation_candle_direction": float(
+                    confirmation["candle_direction"]
+                ),
+                "confirmation_rsi_aligned": float(
+                    bool(confirmation["rsi_aligned"])
+                ),
+                "confirmation_vwap_aligned": float(
+                    bool(confirmation["vwap_aligned"])
+                ),
+                "strategy_breakout": float(matches["breakout"]),
+                "strategy_pure_smc": float(matches["pure_smc"]),
+                "strategy_hybrid": float(matches["hybrid"]),
+                "strategy_match_count": float(len(matched_names)),
             }
         )
         signal.reason = (
-            f"{signal.reason} Confirmed on {confirmation_timeframe.value} closed candle: "
-            f"{confirmation['candle_label']}, RSI {confirmation['rsi']:.1f}, "
-            f"VWAP {confirmation['vwap']:.8f}."
+            f"{signal.reason} Strategy match: {', '.join(matched_names)}. "
+            f"Confirmed on {confirmation_timeframe.value} closed candle: "
+            f"{confirmation['candle_label']}, RSI {float(confirmation['rsi']):.1f}, "
+            f"VWAP {float(confirmation['vwap']):.8f}."
         )
         return signal
+
+    def _strategy_matches(
+        self,
+        candles: list[Candle],
+        direction: Direction,
+    ) -> dict[str, bool]:
+        return {
+            "breakout": self._breakout_match(candles, direction),
+            "pure_smc": self._pure_smc_match(candles, direction),
+            "hybrid": self._hybrid_match(candles, direction),
+        }
+
+    @staticmethod
+    def _breakout_match(candles: list[Candle], direction: Direction) -> bool:
+        latest = candles[-1]
+        lookback = candles[-21:-1]
+        average_volume = sum(candle.volume for candle in lookback) / len(lookback)
+        if average_volume <= 0 or latest.volume < average_volume * 1.5:
+            return False
+
+        resistance = max(candle.high for candle in lookback)
+        support = min(candle.low for candle in lookback)
+        if direction == Direction.BUY:
+            return latest.close > resistance and latest.close > latest.open
+        return latest.close < support and latest.close < latest.open
+
+    @staticmethod
+    def _has_directional_fvg(candles: list[Candle], direction: Direction) -> bool:
+        for index in range(max(2, len(candles) - 8), len(candles)):
+            first = candles[index - 2]
+            third = candles[index]
+            if direction == Direction.BUY and third.low > first.high:
+                return True
+            if direction == Direction.SELL and third.high < first.low:
+                return True
+        return False
+
+    @classmethod
+    def _pure_smc_match(cls, candles: list[Candle], direction: Direction) -> bool:
+        latest = candles[-1]
+        structure_window = candles[-16:-1]
+        recent_window = candles[-6:-1]
+        prior_high = max(candle.high for candle in structure_window)
+        prior_low = min(candle.low for candle in structure_window)
+
+        if direction == Direction.BUY:
+            structure_break = latest.close > prior_high
+            order_block_present = any(
+                candle.close < candle.open for candle in recent_window
+            )
+        else:
+            structure_break = latest.close < prior_low
+            order_block_present = any(
+                candle.close > candle.open for candle in recent_window
+            )
+
+        return (
+            structure_break
+            and order_block_present
+            and cls._has_directional_fvg(candles, direction)
+        )
+
+    @classmethod
+    def _hybrid_match(cls, candles: list[Candle], direction: Direction) -> bool:
+        sweep = candles[-2]
+        displacement = candles[-1]
+        liquidity_window = candles[-14:-2]
+        prior_high = max(candle.high for candle in liquidity_window)
+        prior_low = min(candle.low for candle in liquidity_window)
+        body = abs(displacement.close - displacement.open)
+        average_body = sum(
+            abs(candle.close - candle.open) for candle in liquidity_window
+        ) / len(liquidity_window)
+        displaced = average_body > 0 and body >= average_body * 1.5
+
+        if direction == Direction.BUY:
+            swept_liquidity = sweep.low < prior_low and sweep.close > prior_low
+            directional = displacement.close > displacement.open
+        else:
+            swept_liquidity = sweep.high > prior_high and sweep.close < prior_high
+            directional = displacement.close < displacement.open
+
+        return (
+            swept_liquidity
+            and displaced
+            and directional
+            and cls._has_directional_fvg(candles, direction)
+        )
 
     def _confirmation_context(
         self,
@@ -125,8 +223,6 @@ class ManagedStrategyService(StrategyService):
             candle_label = "bearish"
             candle_direction = -1.0
 
-        # A signal needs a directional closed candle plus at least one momentum
-        # confirmation: RSI alignment OR VWAP alignment.
         if not candle_aligned or not (rsi_aligned or vwap_aligned):
             return None
 
