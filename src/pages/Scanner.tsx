@@ -1,146 +1,248 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertCircle, RefreshCw, Search } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Activity, AlertCircle, RefreshCw } from 'lucide-react';
+import { fetchBackendSignals, runBackendScan } from '../api/client';
+import { CanonicalScanData, ScannerResult, TradingMode } from '../api/types';
 import { useApp } from '../context/AppContext';
-import { ScanOutcome, TradingMode } from '../api/types';
 
-const outcomeStyle: Record<ScanOutcome, string> = {
-  actionable: 'text-emerald-400 border-emerald-900 bg-emerald-950/30',
-  rejected: 'text-rose-400 border-rose-900 bg-rose-950/30',
-  skipped: 'text-amber-400 border-amber-900 bg-amber-950/30',
-  failed: 'text-red-400 border-red-900 bg-red-950/30',
+type PanelState = 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+
+interface ModePanelState {
+  state: PanelState;
+  data: CanonicalScanData | null;
+  error: string | null;
+  movedSignals: number;
+}
+
+const initialPanel: ModePanelState = {
+  state: 'idle',
+  data: null,
+  error: null,
+  movedSignals: 0,
 };
 
-function StatePanel({ title, detail }: { title: string; detail?: string | null }) {
+function strategyLabel(mode: TradingMode): string {
+  return mode === 'scalping' ? 'EMA Pullback Scalping' : 'Trend Continuation Intraday';
+}
+
+function timeframeLabel(mode: TradingMode): string {
+  return mode === 'scalping' ? 'M1 / M5' : 'M15 / H1';
+}
+
+function candidateReason(item: ScannerResult): string {
+  return item.failure_reason || item.rejection_reason || item.reason || 'No additional backend reason.';
+}
+
+function CandidateTable({ rows, mode }: { rows: ScannerResult[]; mode: TradingMode }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950/40 p-8 text-center text-sm text-slate-500">
+        No pending, rejected, skipped, or failed {mode} candidates.
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-10 text-center">
-      <AlertCircle className="mx-auto mb-3 text-slate-500" size={30} />
-      <div className="font-bold text-slate-200">{title}</div>
-      {detail && <div className="mt-2 text-sm text-slate-500">{detail}</div>}
+    <div className="overflow-x-auto rounded-lg border border-slate-800">
+      <table className="w-full min-w-[760px] text-left text-xs">
+        <thead className="bg-slate-950/80 text-[10px] uppercase tracking-wider text-slate-500">
+          <tr>
+            <th className="px-3 py-3">Symbol</th>
+            <th className="px-3 py-3">Side</th>
+            <th className="px-3 py-3">Grade</th>
+            <th className="px-3 py-3">Price</th>
+            <th className="px-3 py-3">TF</th>
+            <th className="px-3 py-3">Status</th>
+            <th className="px-3 py-3">Reason</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-800 bg-slate-900">
+          {rows.map((item, index) => (
+            <tr key={`${mode}-${item.symbol}-${item.timeframe}-${item.outcome}-${index}`} className="align-top">
+              <td className="px-3 py-3 font-black text-white">{item.symbol}</td>
+              <td className="px-3 py-3 font-bold text-slate-200">{item.direction?.toUpperCase() ?? 'N/A'}</td>
+              <td className="px-3 py-3 font-bold text-slate-200">{item.grade ?? 'N/A'}</td>
+              <td className="px-3 py-3 font-mono text-slate-300">{item.metrics?.current_price ?? 'N/A'}</td>
+              <td className="px-3 py-3 text-slate-300">{item.timeframe ?? 'N/A'}</td>
+              <td className="px-3 py-3">
+                <span className={`rounded border px-2 py-1 text-[10px] font-black uppercase ${
+                  item.outcome === 'rejected'
+                    ? 'border-rose-900 bg-rose-950/30 text-rose-400'
+                    : item.outcome === 'failed'
+                      ? 'border-red-900 bg-red-950/30 text-red-400'
+                      : 'border-amber-900 bg-amber-950/30 text-amber-400'
+                }`}>
+                  {item.outcome}
+                </span>
+              </td>
+              <td className="max-w-[270px] px-3 py-3 leading-relaxed text-slate-400">
+                <div className="font-semibold text-slate-300">{item.strategy ?? strategyLabel(mode)}</div>
+                <div className="mt-1">{candidateReason(item)}</div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-export default function Scanner() {
-  const {
-    scannerResponse,
-    scannerState,
-    scannerError,
-    signalsResponse,
-    signalsState,
-    dashboardData,
-    runScanner,
-    refreshSignals,
-  } = useApp();
-  const globalMode = dashboardData?.active_strategy_mode ?? signalsResponse?.filters.mode ?? 'scalping';
-  const [mode, setMode] = useState<TradingMode>(globalMode);
-  const [search, setSearch] = useState('');
-  const [outcome, setOutcome] = useState<'all' | ScanOutcome>('all');
+function ScannerPanel({
+  mode,
+  panel,
+  disabled,
+  onScan,
+}: {
+  mode: TradingMode;
+  panel: ModePanelState;
+  disabled: boolean;
+  onScan: () => void;
+}) {
+  const rows = useMemo(
+    () => (panel.data?.results ?? []).filter((item) => item.outcome !== 'actionable'),
+    [panel.data],
+  );
 
-  useEffect(() => setMode(globalMode), [globalMode]);
-  useEffect(() => {
-    if (!scannerResponse) void refreshSignals();
-  }, []);
-
-  const sourceResults = useMemo(() => {
-    if (scannerResponse?.results?.length) return scannerResponse.results;
-    return (signalsResponse?.signals ?? []).map((signal) => ({
-      symbol: signal.symbol,
-      outcome: signal.status === 'filtered_by_risk_profile' ? 'rejected' as const : 'actionable' as const,
-      mode: signal.mode,
-      timeframe: signal.timeframe,
-      direction: signal.direction,
-      grade: signal.grade,
-      strategy: signal.strategy,
-      reason: signal.reason,
-      rejection_reason: signal.status === 'filtered_by_risk_profile' ? 'Filtered by current risk profile.' : null,
-      failure_reason: null,
-      metrics: null,
-    }));
-  }, [scannerResponse, signalsResponse]);
-
-  const results = useMemo(() => sourceResults.filter((item) => {
-    const matchesSearch = !search || item.symbol.toLowerCase().includes(search.toLowerCase());
-    const matchesOutcome = outcome === 'all' || item.outcome === outcome;
-    return matchesSearch && matchesOutcome;
-  }), [sourceResults, search, outcome]);
-
-  const counts = useMemo(() => sourceResults.reduce((acc, item) => {
+  const counts = useMemo(() => rows.reduce((acc, item) => {
     acc.total += 1;
-    acc[item.outcome] += 1;
+    if (item.outcome === 'rejected') acc.rejected += 1;
+    if (item.outcome === 'skipped') acc.skipped += 1;
+    if (item.outcome === 'failed') acc.failed += 1;
     return acc;
-  }, { total: 0, actionable: 0, rejected: 0, skipped: 0, failed: 0 }), [sourceResults]);
+  }, { total: 0, rejected: 0, skipped: 0, failed: 0 }), [rows]);
 
-  const loading = scannerState === 'loading' || (!scannerResponse && signalsState === 'loading');
-  const errorState = scannerState === 'unauthorized' || scannerState === 'disconnected' || scannerState === 'backend_error';
+  const title = mode === 'scalping' ? 'Scalping Scanner' : 'Intraday Scanner';
 
   return (
-    <div className="p-4 md:p-6 space-y-5">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <section className="min-w-0 rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg">
+      <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-black text-white flex items-center gap-2"><Activity className="text-emerald-400" /> Market Scanner</h1>
-          <p className="text-sm text-slate-500 mt-1">Latest canonical scanner and shared signal-registry results</p>
+          <h2 className="text-lg font-black text-white">{title}</h2>
+          <p className="mt-1 text-xs text-slate-500">{timeframeLabel(mode)} · {strategyLabel(mode)}</p>
         </div>
-        <div className="flex gap-2">
-          <select value={mode} onChange={(e) => setMode(e.target.value as TradingMode)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
-            <option value="scalping">Scalping</option>
-            <option value="intraday">Intraday</option>
-          </select>
-          <button onClick={() => void runScanner({ mode })} disabled={loading} className="rounded-lg bg-emerald-500 px-4 py-2 font-bold text-slate-950 disabled:opacity-50 flex items-center gap-2">
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> {loading ? 'Scanning' : 'Run Scan'}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onScan}
+          disabled={disabled}
+          className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-black text-slate-950 disabled:opacity-50"
+        >
+          <RefreshCw size={15} className={panel.state === 'loading' ? 'animate-spin' : ''} />
+          {panel.state === 'loading' ? 'Scanning' : `Run ${mode === 'scalping' ? 'Scalping' : 'Intraday'}`}
+        </button>
       </div>
 
-      {mode !== globalMode && (
-        <div className="rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-3 text-xs text-amber-300">
-          Previewing {mode}; active backend strategy mode remains {globalMode} until changed in Control Center.
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="my-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         {[
-          ['Total', counts.total], ['Actionable', counts.actionable], ['Rejected', counts.rejected],
-          ['Skipped', counts.skipped], ['Failed', counts.failed],
+          ['Candidates', counts.total],
+          ['Rejected', counts.rejected],
+          ['Skipped', counts.skipped],
+          ['Failed', counts.failed],
         ].map(([label, value]) => (
-          <div key={String(label)} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500">{label}</div>
-            <div className="mt-1 text-2xl font-black text-white">{value}</div>
+          <div key={String(label)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
+            <div className="mt-1 text-xl font-black text-white">{value}</div>
           </div>
         ))}
       </div>
 
-      <div className="flex flex-col md:flex-row gap-3">
-        <div className="relative flex-1"><Search size={16} className="absolute left-3 top-3 text-slate-500" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter symbol" className="w-full rounded-lg border border-slate-800 bg-slate-900 py-2.5 pl-9 pr-3 text-sm" /></div>
-        <select value={outcome} onChange={(e) => setOutcome(e.target.value as 'all' | ScanOutcome)} className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2.5 text-sm">
-          <option value="all">All outcomes</option><option value="actionable">Actionable</option><option value="rejected">Rejected</option><option value="skipped">Skipped</option><option value="failed">Failed</option>
-        </select>
-      </div>
-
-      {loading && <StatePanel title="Scanning canonical backend…" />}
-      {errorState && <StatePanel title="Scanner backend error" detail={scannerError} />}
-      {!loading && !errorState && results.length === 0 && <StatePanel title="No current scanner candidates" detail="The backend completed successfully but no evaluated setup is currently available." />}
-
-      {!loading && results.length > 0 && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-          {results.map((item) => {
-            const reason = item.failure_reason || item.rejection_reason || item.reason;
-            return (
-              <div key={`${item.symbol}-${item.mode}-${item.timeframe}-${item.outcome}`} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div><div className="font-black text-white">{item.symbol}</div><div className="text-xs text-slate-500 mt-1">{item.mode} · {item.timeframe ?? 'N/A'} · {item.strategy ?? 'Strategy not persisted'}</div></div>
-                  <span className={`rounded-md border px-2 py-1 text-[11px] font-black uppercase ${outcomeStyle[item.outcome]}`}>{item.outcome}</span>
-                </div>
-                <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-                  <div className="rounded-lg bg-slate-950 p-2"><span className="text-slate-500">Direction</span><div className="mt-1 font-bold text-slate-200">{item.direction?.toUpperCase() ?? 'N/A'}</div></div>
-                  <div className="rounded-lg bg-slate-950 p-2"><span className="text-slate-500">Grade</span><div className="mt-1 font-bold text-slate-200">{item.grade ?? 'N/A'}</div></div>
-                  <div className="rounded-lg bg-slate-950 p-2"><span className="text-slate-500">Price</span><div className="mt-1 font-bold text-slate-200">{item.metrics?.current_price ?? 'N/A'}</div></div>
-                </div>
-                <div className="mt-3 text-sm text-slate-300 leading-relaxed">{reason ?? 'No additional reason was returned by the backend.'}</div>
-              </div>
-            );
-          })}
+      {panel.movedSignals > 0 && (
+        <div className="mb-4 rounded-lg border border-emerald-900/50 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-300">
+          {panel.movedSignals} actionable signal{panel.movedSignals === 1 ? '' : 's'} moved to AI Signals and removed from this table.
         </div>
       )}
+
+      {panel.state === 'idle' && (
+        <div className="rounded-lg border border-dashed border-slate-800 p-8 text-center text-sm text-slate-500">
+          Run this scanner to load current candidates.
+        </div>
+      )}
+      {panel.state === 'loading' && (
+        <div className="rounded-lg border border-slate-800 p-8 text-center text-sm text-slate-400">Scanning canonical backend…</div>
+      )}
+      {panel.state === 'error' && (
+        <div className="flex items-start gap-2 rounded-lg border border-rose-900/50 bg-rose-950/20 p-4 text-sm text-rose-300">
+          <AlertCircle size={17} className="mt-0.5 shrink-0" /> {panel.error || 'Scanner request failed.'}
+        </div>
+      )}
+      {(panel.state === 'ready' || panel.state === 'empty') && <CandidateTable rows={rows} mode={mode} />}
+    </section>
+  );
+}
+
+export default function Scanner() {
+  const { refreshSignals } = useApp();
+  const [panels, setPanels] = useState<Record<TradingMode, ModePanelState>>({
+    scalping: initialPanel,
+    intraday: initialPanel,
+  });
+  const [activeScan, setActiveScan] = useState<TradingMode | null>(null);
+
+  const scanMode = async (mode: TradingMode) => {
+    setActiveScan(mode);
+    setPanels((current) => ({
+      ...current,
+      [mode]: { ...current[mode], state: 'loading', error: null, movedSignals: 0 },
+    }));
+
+    try {
+      const data = await runBackendScan({ mode });
+      const signalData = await fetchBackendSignals({ mode });
+      const actionableSymbols = new Set(
+        signalData.signals
+          .filter((signal) => signal.status !== 'filtered_by_risk_profile')
+          .map((signal) => `${signal.symbol}:${signal.timeframe}:${signal.direction}`),
+      );
+      const movedSignals = data.results.filter((item) =>
+        item.outcome === 'actionable'
+        || actionableSymbols.has(`${item.symbol}:${item.timeframe}:${item.direction}`),
+      ).length;
+      const remaining = data.results.filter((item) => item.outcome !== 'actionable');
+      const visibleData = { ...data, results: remaining };
+
+      setPanels((current) => ({
+        ...current,
+        [mode]: {
+          state: remaining.length ? 'ready' : 'empty',
+          data: visibleData,
+          error: null,
+          movedSignals,
+        },
+      }));
+      await refreshSignals();
+    } catch (error) {
+      setPanels((current) => ({
+        ...current,
+        [mode]: {
+          ...current[mode],
+          state: 'error',
+          error: error instanceof Error ? error.message : 'Scanner request failed.',
+        },
+      }));
+    } finally {
+      setActiveScan(null);
+    }
+  };
+
+  return (
+    <div className="space-y-5 p-4 md:p-6">
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-black text-white"><Activity className="text-emerald-400" /> Market Scanner</h1>
+        <p className="mt-1 text-sm text-slate-500">Independent 50/50 scanner tables. Actionable setups are transferred to AI Signals.</p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <ScannerPanel
+          mode="scalping"
+          panel={panels.scalping}
+          disabled={activeScan !== null}
+          onScan={() => void scanMode('scalping')}
+        />
+        <ScannerPanel
+          mode="intraday"
+          panel={panels.intraday}
+          disabled={activeScan !== null}
+          onScan={() => void scanMode('intraday')}
+        />
+      </div>
     </div>
   );
 }
