@@ -49,6 +49,11 @@ class DashboardService:
             trade for trade in closed_records
             if is_on_trading_date(trade.closed_time, today)
         ]
+        current_today_records = [
+            trade
+            for trade in [*active_records, *closed_today]
+            if is_on_trading_date(trade.opened_at, today)
+        ]
         opened_today_ids = {
             (
                 trade.symbol,
@@ -56,8 +61,7 @@ class DashboardService:
                 trade.direction.value if hasattr(trade.direction, "value") else str(trade.direction),
                 trade.opened_at,
             )
-            for trade in [*active_records, *closed_records]
-            if is_on_trading_date(trade.opened_at, today)
+            for trade in current_today_records
         }
 
         realized_values = [trade.realized_pnl for trade in closed_today if trade.realized_pnl is not None]
