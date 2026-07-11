@@ -19,27 +19,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
       - name: Type check
-        id: typecheck
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          npm run lint > frontend-typecheck.log 2>&1
-          status=$?
-          cat frontend-typecheck.log
-          echo "$status" > frontend-typecheck-status.txt
-          exit $status
-      - name: Upload type-check log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-typecheck-log
-          path: |
-            frontend-typecheck.log
-            frontend-typecheck-status.txt
-      - name: Enforce type-check result
-        if: steps.typecheck.outcome != 'success'
-        run: exit 1
+        run: npm run lint
       - name: Build frontend
         run: npm run build
 
