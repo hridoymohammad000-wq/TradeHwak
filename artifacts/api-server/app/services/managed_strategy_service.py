@@ -164,7 +164,10 @@ class ManagedStrategyService(StrategyService):
         average_body = sum(
             abs(candle.close - candle.open) for candle in liquidity_window
         ) / len(liquidity_window)
-        displaced = average_body > 0 and body >= average_body * 1.5
+        # A flat/doji-only lookback has a zero average body. In that case a
+        # non-zero displacement candle is still meaningful and must not be
+        # rejected solely because the relative multiplier has no denominator.
+        displaced = body > 0 if average_body == 0 else body >= average_body * 1.5
 
         if direction == Direction.BUY:
             swept_liquidity = sweep.low < prior_low and sweep.close > prior_low
