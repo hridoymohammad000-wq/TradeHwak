@@ -71,8 +71,10 @@ export interface CanonicalJournalData { closed_trades:CanonicalClosedTrade[]; su
 
 export interface DashboardAccountSummary { status:'connected'|'not_configured'|'unavailable'|string; equity:number|null; available_balance:number|null; }
 export interface CanonicalDashboardTodaySummary {
-  opened_trades_today:number;
-  active_trades_now:number;
+  // These newer aggregate fields are optional while older backend payloads are
+  // still supported. The always-present counters below remain authoritative.
+  opened_trades_today?:number;
+  active_trades_now?:number;
   total_open_trades:number;
   scalping_open_trades:number;
   intraday_open_trades:number;
@@ -80,9 +82,9 @@ export interface CanonicalDashboardTodaySummary {
   closed_trades_today:number;
   wins_today:number;
   losses_today:number;
-  breakeven_today:number;
+  breakeven_today?:number;
   win_rate_today:number|null;
-  loss_rate_today:number|null;
+  loss_rate_today?:number|null;
   unrealized_pnl:number|null;
   realized_pnl_today:number|null;
   average_risk_reward_today:number|null;
