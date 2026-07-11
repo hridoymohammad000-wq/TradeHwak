@@ -19,7 +19,7 @@ def _closed_trade_key(row: dict) -> str:
 def _managed_from_closed_row(service: TradeService, row: dict, selected_mode) -> ManagedTrade:
     symbol = str(row.get("symbol") or "").upper()
     side = str(row.get("side") or "").lower()
-    direction = Direction.BUY if side == "buy" else Direction.SELL
+    direction = Direction.SELL if side == "buy" else Direction.BUY
     entry = service._safe_float(row.get("avgEntryPrice") or row.get("entryPrice"), 0.0)
     exit_price = service._safe_float(row.get("avgExitPrice") or row.get("fillPrice"), entry)
     qty = str(row.get("qty") or row.get("closedSize") or "") or None
