@@ -36,11 +36,28 @@ jobs:
         working-directory: artifacts/api-server
         run: python -m compileall -q app
       - name: Run all backend tests
+        id: backend_tests
+        continue-on-error: true
         working-directory: artifacts/api-server
         shell: bash
         run: |
-          set -o pipefail
-          python -m unittest discover -s tests -p "test_*.py" -v 2>&1 | tail -n 160
+          set +e
+          python -m unittest discover -s tests -p "test_*.py" -v > backend-test.log 2>&1
+          status=$?
+          echo "$status" > backend-test-status.txt
+          tail -n 120 backend-test.log
+          exit $status
+      - name: Upload backend test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase10-backend-test-log
+          path: |
+            artifacts/api-server/backend-test.log
+            artifacts/api-server/backend-test-status.txt
+      - name: Enforce backend test result
+        if: steps.backend_tests.outcome != 'success'
+        run: exit 1
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
