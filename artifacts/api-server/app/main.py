@@ -16,7 +16,10 @@ from app.core.state import (
     settings_service,
     trade_service,
 )
+from app.services.exchange_reconciliation import install_exchange_reconciliation_patch
 
+
+install_exchange_reconciliation_patch()
 
 AUTO_TRADE_INTERVAL_SECONDS = 300
 
