@@ -94,8 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Network, timeout, or backend failures must not invalidate a valid cookie.
-      // During initial load keep the app in checking state and retry automatically.
+      // Temporary network or backend failures do not invalidate an existing session.
       setAuthState((current) => current === 'authenticated' ? 'authenticated' : 'checking');
     }
   }, [applyValidSession, markUnauthorized]);
@@ -111,7 +110,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const retryMs = authState === 'checking' ? 5_000 : 30_000;
+    // Retry quickly only during initial backend wake-up. Once authenticated,
+    // verify every five minutes instead of refreshing session state every 30 seconds.
+    const retryMs = authState === 'checking' ? 5_000 : 300_000;
     const intervalId = window.setInterval(() => {
       void verifyBackendAndSession();
     }, retryMs);
