@@ -14,6 +14,7 @@ import ActiveTrades from './pages/ActiveTrades';
 import OperatorJournal from './pages/OperatorJournal';
 import ControlCenter from './pages/ControlCenter';
 import PerformanceStrategy from './pages/PerformanceStrategy';
+import DoubleDownChallenge from './pages/DoubleDownChallenge';
 import Login from './pages/Login';
 import { getBackendStatusPresentation } from './lib/backendStatus';
 import {
@@ -92,10 +93,15 @@ function TerminalShell() {
     { name: 'active_trades' as PageName, label: 'Active Trades', icon: Layers, badge: activeTradesData?.active_trades.length },
     { name: 'journal' as PageName, label: 'Operator Journal', icon: Target, badge: todaysClosedTrades },
     { name: 'performance' as PageName, label: 'Performance & Strategy', icon: BarChart3 },
+    { name: 'double_down' as PageName, label: 'Double Down Challenge', icon: ShieldAlert },
     { name: 'settings' as PageName, label: 'Control Center', icon: Sliders },
   ];
 
   const renderActivePage = () => {
+    if ((currentPage as string) === 'double_down') {
+      return <DoubleDownChallenge />;
+    }
+
     switch (currentPage) {
       case 'dashboard':
         return <Dashboard />;
