@@ -24,6 +24,15 @@ CREATE TABLE IF NOT EXISTS workflow_state (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS double_down_challenges (
+    challenge_id uuid PRIMARY KEY,
+    snapshot jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_double_down_challenges_updated_at
+    ON double_down_challenges(updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS trade_history (
     id bigserial PRIMARY KEY,
     trade_key text NOT NULL UNIQUE,
