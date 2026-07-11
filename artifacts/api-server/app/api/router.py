@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.bybit import router as bybit_router
+from app.api.routes.challenge import router as challenge_router
 from app.api.routes.chart_context import router as chart_context_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.engine_control import router as engine_control_router
@@ -27,3 +28,4 @@ api_router.include_router(trades_router)
 api_router.include_router(chart_context_router)
 api_router.include_router(engine_control_router)
 api_router.include_router(workflow_router)
+api_router.include_router(challenge_router)
