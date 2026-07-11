@@ -21,10 +21,14 @@ class FakeBybit:
 
 class StepFourStrategyTests(unittest.TestCase):
     def test_weighted_grade_thresholds(self):
-        self.assertEqual(StrategyService._grade_from_score(84), SignalGrade.A_PLUS)
-        self.assertEqual(StrategyService._grade_from_score(74), SignalGrade.A)
-        self.assertEqual(StrategyService._grade_from_score(64), SignalGrade.B_PLUS)
-        self.assertEqual(StrategyService._grade_from_score(63.9), SignalGrade.B)
+        # Canonical thresholds are locked across the current strategy and
+        # trade-management contracts: A+ >= 90, A >= 85, B+ >= 75.
+        self.assertEqual(StrategyService._grade_from_score(90), SignalGrade.A_PLUS)
+        self.assertEqual(StrategyService._grade_from_score(89.9), SignalGrade.A)
+        self.assertEqual(StrategyService._grade_from_score(85), SignalGrade.A)
+        self.assertEqual(StrategyService._grade_from_score(84.9), SignalGrade.B_PLUS)
+        self.assertEqual(StrategyService._grade_from_score(75), SignalGrade.B_PLUS)
+        self.assertEqual(StrategyService._grade_from_score(74.9), SignalGrade.B)
 
     def test_atr_calculation(self):
         candles = [Candle(100 + i, 101 + i, 99 + i, 100.5 + i, 1000) for i in range(20)]
