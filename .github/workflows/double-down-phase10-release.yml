@@ -61,14 +61,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install pinned npm
+        run: npm install --global npm@10.8.2 --no-audit --no-fund
       - name: Install frontend dependencies
         shell: bash
         run: |
-          for attempt in 1 2 3; do
-            npm ci && exit 0
-            echo "npm ci attempt ${attempt} failed"
-            if [ "$attempt" -lt 3 ]; then sleep $((attempt * 10)); fi
-          done
-          exit 1
+          npm ci --no-audit --no-fund || \
+          npm install --no-audit --no-fund
       - name: Build frontend
         run: npm run build
