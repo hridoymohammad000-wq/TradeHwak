@@ -1,0 +1,47 @@
+name: Double Down Challenge Phase 10 Release Gate
+
+on:
+  push:
+    branches:
+      - feature/double-down-challenge-phase-10
+  pull_request:
+    paths:
+      - "artifacts/api-server/app/double_down/**"
+      - "artifacts/api-server/app/api/routes/challenge.py"
+      - "artifacts/api-server/app/api/router.py"
+      - "artifacts/api-server/app/core/state.py"
+      - "artifacts/api-server/migrations/001_init.sql"
+      - "artifacts/api-server/tests/**"
+      - "src/pages/DoubleDownChallenge.tsx"
+      - "docs/DOUBLE_DOWN_RELEASE_CHECKLIST.md"
+      - ".github/workflows/double-down-phase10-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-release-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: artifacts/api-server/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r artifacts/api-server/requirements.txt
+      - name: Compile backend
+        working-directory: artifacts/api-server
+        run: python -m compileall -q app
+      - name: Run all backend tests
+        working-directory: artifacts/api-server
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
