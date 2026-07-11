@@ -77,8 +77,12 @@ def evaluate_momentum_volume_strategy(
     if len({item.close_time for item in ordered}) != len(ordered):
         return _reject(slot_type=slot_type, symbol=symbol, code="DUPLICATE_CANDLES", evidence={})
 
+    # Historical candles must be structurally valid; only the newest candle is
+    # subject to the freshness window. Validating every historical candle against
+    # the latest timestamp incorrectly classifies the lookback as stale.
     for candle in ordered:
-        validate_closed_one_minute_candle(candle, now=ordered[-1].close_time)
+        validate_closed_one_minute_candle(candle, now=candle.close_time)
+    validate_closed_one_minute_candle(ordered[-1], now=ordered[-1].close_time)
 
     latest = ordered[-1]
     previous = ordered[-2]
