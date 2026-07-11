@@ -123,6 +123,17 @@ class ExchangeReconciliationAuthorityTests(unittest.TestCase):
             {round(row.realized_pnl or 0, 4) for row in lab_records},
             {29.6696, 24.6922},
         )
+        self.assertEqual(
+            {row.direction for row in lab_records},
+            {Direction.BUY},
+        )
+
+        pepe_record = next(
+            row
+            for row in self.service.get_closed_trades().data.closed_trades
+            if row.symbol == "1000PEPEUSDT"
+        )
+        self.assertEqual(pepe_record.direction, Direction.SELL)
 
     def test_refresh_is_idempotent(self):
         self.service.sync_with_exchange(FakeBybit())
