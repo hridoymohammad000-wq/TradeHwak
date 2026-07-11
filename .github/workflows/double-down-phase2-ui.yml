@@ -1,0 +1,42 @@
+name: Double Down Challenge Phase 2 UI
+
+on:
+  push:
+    branches:
+      - feature/double-down-challenge-phase-2
+    paths:
+      - "src/App.tsx"
+      - "src/pages/DoubleDownChallenge.tsx"
+      - "docs/double-down-challenge/PHASE_2_UI_SCOPE.md"
+      - ".github/workflows/double-down-phase2-ui.yml"
+  pull_request:
+    paths:
+      - "src/App.tsx"
+      - "src/pages/DoubleDownChallenge.tsx"
+      - "docs/double-down-challenge/PHASE_2_UI_SCOPE.md"
+      - ".github/workflows/double-down-phase2-ui.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase2-ui-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package.json
+      - name: Install dependencies
+        run: npm install
+      - name: Build UI prototype
+        run: npm run build
+      - name: Verify challenge page is local-only
+        run: |
+          if grep -En "fetch\(|axios|WebSocket|submitOrder|executeSignal" src/pages/DoubleDownChallenge.tsx; then
+            echo "Phase 2 page must remain local-only"
+            exit 1
+          fi
