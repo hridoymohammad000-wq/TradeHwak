@@ -62,6 +62,13 @@ jobs:
         with:
           node-version: "22"
       - name: Install frontend dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci attempt ${attempt} failed"
+            if [ "$attempt" -lt 3 ]; then sleep $((attempt * 10)); fi
+          done
+          exit 1
       - name: Build frontend
         run: npm run build
