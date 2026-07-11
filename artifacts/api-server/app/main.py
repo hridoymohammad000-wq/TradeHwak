@@ -33,7 +33,7 @@ FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 async def _auto_trade_loop() -> None:
     while True:
         try:
-            result = auto_trade_service.run_cycle()
+            result = await asyncio.to_thread(auto_trade_service.run_cycle)
             persistence_repository.append_log("execution_logs", "auto_trade_cycle", result)
         except Exception as exc:
             persistence_repository.append_log(

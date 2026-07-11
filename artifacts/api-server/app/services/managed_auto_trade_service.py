@@ -12,8 +12,8 @@ class ManagedAutoTradeService(AutoTradeService):
         super().__init__(*args, **kwargs)
         self._trade_management_service = trade_management_service
 
-    def run_cycle(self) -> dict[str, int | str]:
-        result = super().run_cycle()
+    def _run_cycle(self) -> dict[str, int | str]:
+        result = super()._run_cycle()
         management = self._trade_management_service.manage_open_trades()
         return {
             **result,

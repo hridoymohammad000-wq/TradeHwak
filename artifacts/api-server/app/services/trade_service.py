@@ -274,6 +274,27 @@ class TradeService:
         self._ensure_current_day()
         return self._daily_trade_count
 
+    def get_daily_realized_pnl(self) -> float:
+        self._ensure_current_day()
+        return sum(
+            float(trade.realized_pnl or 0.0)
+            for trade in self._closed_trades
+            if is_on_trading_date(trade.closed_time, self._trade_day)
+        )
+
+    def get_daily_realized_loss(self) -> float:
+        realized_pnl = self.get_daily_realized_pnl()
+        return abs(realized_pnl) if realized_pnl < 0 else 0.0
+
+    def get_remaining_daily_loss_budget(
+        self,
+        configured_daily_max_loss: float,
+    ) -> float:
+        return max(
+            float(configured_daily_max_loss) - self.get_daily_realized_loss(),
+            0.0,
+        )
+
     def has_open_trade_for_symbol(self, symbol: str) -> bool:
         self._ensure_current_day()
         normalized = symbol.upper()

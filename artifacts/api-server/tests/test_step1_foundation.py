@@ -37,6 +37,7 @@ class StepOneFoundationTests(unittest.TestCase):
             "auto_trade_enabled": True,
             "emergency_stop": False,
             "risk_per_trade_pct": 1.0,
+            "daily_max_loss": 100.0,
             "max_open_positions": 2,
             "daily_max_trades": 5,
         }
@@ -55,6 +56,21 @@ class StepOneFoundationTests(unittest.TestCase):
             )
 
         self.assertEqual(context.exception.detail, "Scalping engine is disabled.")
+
+    def test_auto_trade_requires_positive_canonical_risk_limits(self):
+        cases = (
+            ("daily_max_loss", "Set daily max loss above 0 USDT"),
+            ("daily_max_trades", "Set daily max trades above 0"),
+            ("max_open_positions", "Set max open positions above 0"),
+        )
+        for field, expected in cases:
+            with self.subTest(field=field):
+                service = SettingsService(repository=FakeRepository())
+                with self.assertRaises(HTTPException) as context:
+                    service.update_settings(
+                        self._valid_settings_update(**{field: 0})
+                    )
+                self.assertIn(expected, context.exception.detail)
 
     def test_health_execution_flag_uses_persisted_settings_readiness(self):
         service = SettingsService(repository=FakeRepository())
