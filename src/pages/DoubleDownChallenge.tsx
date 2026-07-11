@@ -1,313 +1,187 @@
-import React, { useMemo, useState } from 'react';
-import {
-  Activity,
-  AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
-  Bitcoin,
-  Pause,
-  Play,
-  RotateCcw,
-  ShieldAlert,
-  Target,
-  TrendingDown,
-  TrendingUp,
-  Wallet,
-} from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Pause, Play, RotateCcw, ShieldAlert, Wallet } from 'lucide-react';
 
-type ChallengeState = 'draft' | 'ready' | 'running' | 'paused';
-
-type SlotPreview = {
-  name: string;
-  symbol: string;
-  direction: 'LONG' | 'SHORT' | 'WAIT';
-  confidence: number | null;
-  risk: number;
-  status: 'Locked' | 'Scanning' | 'Waiting';
-  icon: React.ComponentType<{ className?: string }>;
+type ChallengeSnapshot = {
+  config: {
+    challenge_id: string;
+    starting_balance: string;
+    target_balance: string;
+    failure_floor: string;
+    cycle_risk_pct: string;
+  };
+  state: {
+    status: string;
+    current_balance: string;
+    recovery_target: string;
+    cycle_number: number;
+    active_trade_count: number;
+  };
+  ledger: Array<{
+    entry_id: string;
+    cycle_number: number;
+    entry_type: string;
+    amount: string;
+    balance_after: string;
+    created_at: string;
+  }>;
 };
 
-const formatMoney = (value: number) => `${value.toFixed(2)} USDT`;
+const money = (value: string | number) => `${Number(value).toFixed(2)} USDT`;
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    ...init,
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || `Request failed (${response.status})`);
+  }
+  return response.json();
+}
 
 export default function DoubleDownChallenge() {
   const [startingBalance, setStartingBalance] = useState(100);
-  const [state, setState] = useState<ChallengeState>('draft');
+  const [failureFloor, setFailureFloor] = useState(20);
+  const [snapshot, setSnapshot] = useState<ChallengeSnapshot | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const targetBalance = startingBalance * 2;
-  const cycleRisk = startingBalance * 0.3;
-  const perSlotRisk = cycleRisk / 3;
+  useEffect(() => {
+    void api<ChallengeSnapshot[]>('/challenge')
+      .then((items) => setSnapshot(items[0] || null))
+      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Failed to load challenge'));
+  }, []);
 
-  const slots = useMemo<SlotPreview[]>(
-    () => [
-      {
-        name: 'BTC Anchor',
-        symbol: 'BTCUSDT',
-        direction: 'WAIT',
-        confidence: null,
-        risk: perSlotRisk,
-        status: 'Locked',
-        icon: Bitcoin,
-      },
-      {
-        name: 'Top Gainer',
-        symbol: 'Pending scan',
-        direction: 'WAIT',
-        confidence: null,
-        risk: perSlotRisk,
-        status: 'Scanning',
-        icon: TrendingUp,
-      },
-      {
-        name: 'Top Loser',
-        symbol: 'Pending scan',
-        direction: 'WAIT',
-        confidence: null,
-        risk: perSlotRisk,
-        status: 'Scanning',
-        icon: TrendingDown,
-      },
-    ],
-    [perSlotRisk],
-  );
+  const progress = useMemo(() => {
+    if (!snapshot) return 0;
+    const start = Number(snapshot.config.starting_balance);
+    const target = Number(snapshot.config.target_balance);
+    const current = Number(snapshot.state.current_balance);
+    if (target <= start) return 0;
+    return Math.max(0, Math.min(100, ((current - start) / (target - start)) * 100));
+  }, [snapshot]);
 
-  const handlePrimaryAction = () => {
-    if (state === 'running') {
-      setState('paused');
-      return;
+  const createChallenge = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api<ChallengeSnapshot>('/challenge', {
+        method: 'POST',
+        body: JSON.stringify({ starting_balance: startingBalance, failure_floor: failureFloor }),
+      });
+      setSnapshot(created);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Challenge creation failed');
+    } finally {
+      setBusy(false);
     }
-    setState('running');
   };
 
-  const resetPreview = () => {
-    setStartingBalance(100);
-    setState('draft');
+  const action = async (name: 'start' | 'pause' | 'resume' | 'terminate') => {
+    if (!snapshot) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api<ChallengeSnapshot>(`/challenge/${snapshot.config.challenge_id}/${name}`, {
+        method: 'POST',
+      });
+      setSnapshot(updated);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Challenge action failed');
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const status = snapshot?.state.status || 'not_created';
+  const canStart = status === 'ready';
+  const canPause = status === 'running' || status === 'recovery';
+  const canResume = status === 'paused';
 
   return (
     <div className="min-h-full bg-slate-950 p-4 md:p-6 space-y-6">
-      <section className="rounded-2xl border border-amber-500/20 bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/20 p-5 md:p-6 shadow-xl">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
+      <section className="rounded-2xl border border-amber-500/20 bg-slate-900 p-5 md:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="flex items-center gap-2 text-amber-400 text-xs font-bold uppercase tracking-[0.22em]">
-              <ShieldAlert className="h-4 w-4" />
-              High-Risk Isolated Workspace
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-amber-400">
+              <ShieldAlert className="h-4 w-4" /> Isolated Demo Challenge
             </div>
-            <h1 className="mt-3 text-2xl md:text-3xl font-black text-white">Double Down Challenge</h1>
-            <p className="mt-2 max-w-2xl text-sm text-slate-400">
-              Local UI prototype only. No exchange connection, order execution, real balance mutation, or simulated market price is active in this phase.
-            </p>
+            <h1 className="mt-3 text-3xl font-black text-white">Double Down Challenge</h1>
+            <p className="mt-2 text-sm text-slate-400">Persistent challenge state and controls are connected to the backend. Live-money mode remains blocked.</p>
           </div>
-
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={handlePrimaryAction}
-              className="inline-flex items-center gap-2 rounded-lg bg-amber-400 px-4 py-2.5 text-sm font-black text-slate-950 hover:bg-amber-300 transition-colors"
-            >
-              {state === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              {state === 'running' ? 'Pause Preview' : state === 'paused' ? 'Resume Preview' : 'Start Preview'}
-            </button>
-            <button
-              type="button"
-              onClick={resetPreview}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-bold text-slate-200 hover:bg-slate-800 transition-colors"
-            >
-              <RotateCcw className="h-4 w-4" />
-              Reset
-            </button>
-          </div>
+          {snapshot && (
+            <div className="flex flex-wrap gap-2">
+              {canStart && <ActionButton label="Start" icon={Play} onClick={() => void action('start')} disabled={busy} />}
+              {canPause && <ActionButton label="Pause" icon={Pause} onClick={() => void action('pause')} disabled={busy} />}
+              {canResume && <ActionButton label="Resume" icon={Play} onClick={() => void action('resume')} disabled={busy} />}
+              {!['completed', 'failed', 'terminated'].includes(status) && (
+                <ActionButton label="Terminate" icon={RotateCcw} onClick={() => void action('terminate')} disabled={busy} secondary />
+              )}
+            </div>
+          )}
         </div>
       </section>
 
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-1 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-          <div className="flex items-center gap-2 mb-5">
-            <Wallet className="h-5 w-5 text-emerald-400" />
-            <h2 className="font-bold text-white">Challenge Setup</h2>
-          </div>
-
-          <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-            Starting Balance
-          </label>
-          <div className="relative">
-            <input
-              type="number"
-              min={10}
-              step={10}
-              value={startingBalance}
-              onChange={(event) => setStartingBalance(Math.max(10, Number(event.target.value) || 10))}
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 pr-20 font-mono text-white outline-none focus:border-amber-400"
-            />
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">USDT</span>
-          </div>
-
-          <div className="mt-5 space-y-3 text-sm">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <span className="text-slate-400">Target Balance</span>
-              <span className="font-mono font-bold text-emerald-400">{formatMoney(targetBalance)}</span>
-            </div>
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <span className="text-slate-400">Timeframe</span>
-              <span className="font-mono font-bold text-white">1m</span>
-            </div>
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <span className="text-slate-400">Risk : Reward</span>
-              <span className="font-mono font-bold text-white">1 : 1</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Max Active Trades</span>
-              <span className="font-mono font-bold text-white">3</span>
-            </div>
-          </div>
+      {error && (
+        <div className="flex items-center gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
+          <AlertTriangle className="h-5 w-5" /> {error}
         </div>
+      )}
 
-        <div className="xl:col-span-2 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-          <div className="flex items-center justify-between mb-5">
-            <div className="flex items-center gap-2">
-              <Target className="h-5 w-5 text-amber-400" />
-              <h2 className="font-bold text-white">Challenge Status</h2>
+      {!snapshot ? (
+        <section className="max-w-xl rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <div className="mb-5 flex items-center gap-2"><Wallet className="h-5 w-5 text-emerald-400" /><h2 className="font-bold text-white">Create Challenge</h2></div>
+          <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400">Starting Balance</label>
+          <input className="mb-4 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white" type="number" min={10} value={startingBalance} onChange={(event) => setStartingBalance(Number(event.target.value))} />
+          <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400">Failure Floor</label>
+          <input className="mb-5 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white" type="number" min={1} value={failureFloor} onChange={(event) => setFailureFloor(Number(event.target.value))} />
+          <button disabled={busy} onClick={() => void createChallenge()} className="rounded-lg bg-amber-400 px-4 py-2.5 text-sm font-black text-slate-950 disabled:opacity-50">Create Isolated Challenge</button>
+        </section>
+      ) : (
+        <>
+          <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            <Metric label="Status" value={status.toUpperCase()} />
+            <Metric label="Current Balance" value={money(snapshot.state.current_balance)} />
+            <Metric label="Target" value={money(snapshot.config.target_balance)} />
+            <Metric label="Cycle" value={String(snapshot.state.cycle_number)} />
+            <Metric label="Active Trades" value={String(snapshot.state.active_trade_count)} />
+          </section>
+
+          <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <div className="mb-2 flex justify-between text-xs font-bold text-slate-400"><span>Challenge progress</span><span>{progress.toFixed(2)}%</span></div>
+            <div className="h-3 overflow-hidden rounded-full bg-slate-950"><div className="h-full rounded-full bg-emerald-400" style={{ width: `${progress}%` }} /></div>
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <Metric label="Starting Balance" value={money(snapshot.config.starting_balance)} />
+              <Metric label="Failure Floor" value={money(snapshot.config.failure_floor)} />
+              <Metric label="Cycle Risk" value={`${Number(snapshot.config.cycle_risk_pct) * 100}%`} />
             </div>
-            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] font-black uppercase tracking-wider text-amber-300">
-              {state}
-            </span>
-          </div>
+          </section>
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <Metric label="Current Balance" value={formatMoney(startingBalance)} />
-            <Metric label="Target" value={formatMoney(targetBalance)} />
-            <Metric label="Net PnL" value="0.00 USDT" />
-            <Metric label="Progress" value="0.00%" />
-          </div>
-
-          <div className="mt-5">
-            <div className="mb-2 flex items-center justify-between text-xs font-bold text-slate-400">
-              <span>Challenge progress</span>
-              <span>0 / 100%</span>
+          <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <h2 className="mb-4 font-bold text-white">Challenge Ledger</h2>
+            <div className="space-y-2">
+              {snapshot.ledger.map((entry) => (
+                <div key={entry.entry_id} className="grid grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm md:grid-cols-4">
+                  <span className="text-slate-400">{entry.entry_type}</span>
+                  <span className="font-mono text-white">Cycle {entry.cycle_number}</span>
+                  <span className="font-mono text-white">{money(entry.amount)}</span>
+                  <span className="font-mono text-emerald-400">{money(entry.balance_after)}</span>
+                </div>
+              ))}
             </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-slate-950">
-              <div className="h-full w-0 rounded-full bg-emerald-400" />
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100/80 flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400" />
-            Preview controls change local component state only. They do not start the Python engine or submit an order.
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-center gap-2 mb-4">
-          <Activity className="h-5 w-5 text-cyan-400" />
-          <h2 className="font-bold text-white">Three-Slot Preview</h2>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {slots.map((slot) => (
-            <SlotCard key={slot.name} slot={slot} />
-          ))}
-        </div>
-      </section>
-
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-          <h2 className="font-bold text-white mb-4">Risk Preview</h2>
-          <div className="space-y-3">
-            <RiskLine label="Total cycle risk" value={formatMoney(cycleRisk)} emphasized />
-            <RiskLine label="Risk per slot" value={formatMoney(perSlotRisk)} />
-            <RiskLine label="Maximum gross cycle loss" value={`-${formatMoney(cycleRisk)}`} danger />
-            <RiskLine label="Maximum gross cycle gain" value={`+${formatMoney(cycleRisk)}`} positive />
-            <RiskLine label="Recovery target after loss" value={formatMoney(startingBalance)} />
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-          <h2 className="font-bold text-white mb-4">Active Trades</h2>
-          <EmptyState text="No challenge trades are active. Phase 2 does not connect to execution." />
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-        <h2 className="font-bold text-white mb-4">Trade History</h2>
-        <EmptyState text="No trade history yet. Ledger and persistence arrive in later phases." />
-      </section>
+          </section>
+        </>
+      )}
     </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</p>
-      <p className="mt-2 font-mono text-base font-black text-white">{value}</p>
-    </div>
-  );
+  return <div className="rounded-xl border border-slate-800 bg-slate-900 p-4"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</p><p className="mt-2 font-mono font-black text-white">{value}</p></div>;
 }
 
-function SlotCard({ slot }: { slot: SlotPreview }) {
-  const Icon = slot.icon;
-  return (
-    <article className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg border border-slate-700 bg-slate-950 p-2.5">
-            <Icon className="h-5 w-5 text-amber-400" />
-          </div>
-          <div>
-            <h3 className="font-bold text-white">{slot.name}</h3>
-            <p className="text-xs text-slate-500">{slot.status}</p>
-          </div>
-        </div>
-        <span className="rounded-full border border-slate-700 px-2.5 py-1 text-[10px] font-black text-slate-400">
-          {slot.direction}
-        </span>
-      </div>
-
-      <div className="mt-5 space-y-3 text-sm">
-        <RiskLine label="Symbol" value={slot.symbol} />
-        <RiskLine label="Approved risk" value={formatMoney(slot.risk)} />
-        <RiskLine label="Confidence" value={slot.confidence == null ? 'Not evaluated' : `${slot.confidence}%`} />
-      </div>
-    </article>
-  );
-}
-
-function RiskLine({
-  label,
-  value,
-  emphasized = false,
-  danger = false,
-  positive = false,
-}: {
-  label: string;
-  value: string;
-  emphasized?: boolean;
-  danger?: boolean;
-  positive?: boolean;
-}) {
-  const valueClass = danger
-    ? 'text-rose-400'
-    : positive
-      ? 'text-emerald-400'
-      : emphasized
-        ? 'text-amber-300'
-        : 'text-slate-100';
-
-  return (
-    <div className="flex items-center justify-between border-b border-slate-800 pb-3 last:border-0 last:pb-0">
-      <span className="text-sm text-slate-400">{label}</span>
-      <span className={`font-mono text-sm font-bold ${valueClass}`}>{value}</span>
-    </div>
-  );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return (
-    <div className="flex min-h-32 flex-col items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/60 px-4 text-center">
-      <div className="flex items-center gap-2 text-slate-500">
-        <ArrowUpRight className="h-4 w-4" />
-        <ArrowDownRight className="h-4 w-4" />
-      </div>
-      <p className="mt-3 max-w-md text-sm text-slate-500">{text}</p>
-    </div>
-  );
+function ActionButton({ label, icon: Icon, onClick, disabled, secondary = false }: { label: string; icon: React.ComponentType<{ className?: string }>; onClick: () => void; disabled: boolean; secondary?: boolean }) {
+  return <button type="button" disabled={disabled} onClick={onClick} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-black disabled:opacity-50 ${secondary ? 'border border-slate-700 bg-slate-950 text-slate-200' : 'bg-amber-400 text-slate-950'}`}><Icon className="h-4 w-4" />{label}</button>;
 }
