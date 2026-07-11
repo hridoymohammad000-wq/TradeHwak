@@ -35,10 +35,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
+    const payload: { detail?: string } = await response.json().catch(() => ({}));
     throw new Error(payload.detail || `Request failed (${response.status})`);
   }
-  return response.json();
+  return response.json() as Promise<T>;
 }
 
 export default function DoubleDownChallenge() {
