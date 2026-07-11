@@ -52,7 +52,6 @@ class SettingsService:
                 self._settings = candidate
                 self._persist()
                 return
-
         self._settings = candidate
 
     def _persist(self) -> None:
@@ -193,8 +192,14 @@ class SettingsService:
             return "Auto trade is off."
         if settings.system_mode != RuntimeMode.DEMO:
             return "System mode must be demo before auto trade can run."
-        if not settings.scalping_engine_enabled and not settings.intraday_engine_enabled:
-            return "Enable at least one trading engine before auto trade can run."
+        if settings.active_strategy_mode == TradingMode.SCALPING:
+            if not settings.scalping_engine_enabled:
+                return "Scalping engine is disabled."
+        elif settings.active_strategy_mode == TradingMode.INTRADAY:
+            if not settings.intraday_engine_enabled:
+                return "Intraday engine is disabled."
+        else:
+            return "Selected strategy mode is unsupported."
         if settings.risk_per_trade_pct <= 0:
             return "Set risk per trade above 0% before enabling auto trade."
         return None
