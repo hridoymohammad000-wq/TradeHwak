@@ -1,0 +1,38 @@
+name: Exchange Reconciliation Tests
+
+on:
+  push:
+    branches:
+      - fix/exchange-reconciliation-authority
+    paths:
+      - "artifacts/api-server/app/services/exchange_reconciliation.py"
+      - "artifacts/api-server/app/main.py"
+      - "artifacts/api-server/tests/test_exchange_reconciliation_authority.py"
+      - ".github/workflows/exchange-reconciliation-tests.yml"
+  pull_request:
+    paths:
+      - "artifacts/api-server/app/services/exchange_reconciliation.py"
+      - "artifacts/api-server/app/main.py"
+      - "artifacts/api-server/tests/test_exchange_reconciliation_authority.py"
+      - ".github/workflows/exchange-reconciliation-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  reconciliation-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: artifacts/api-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: artifacts/api-server/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run reconciliation regression tests
+        run: python -m unittest tests.test_exchange_reconciliation_authority -v
