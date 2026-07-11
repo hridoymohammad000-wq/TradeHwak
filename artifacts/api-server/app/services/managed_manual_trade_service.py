@@ -12,8 +12,6 @@ class ManagedManualTradeService(ManualTradeService):
         TradingMode.SCALPING: 5,
         TradingMode.INTRADAY: 3,
     }
-    DEFAULT_OVERALL_OPEN_LIMIT = 5
-
     def execute_manual_trade(
         self,
         payload: ManualTradeRequest,
@@ -33,6 +31,13 @@ class ManagedManualTradeService(ManualTradeService):
                 detail=f"{payload.symbol.upper()} already has an open position.",
             )
 
+        settings = self._settings_service.get_settings_state()
+        if self._trade_service.get_daily_trade_count() >= settings.daily_max_trades:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Daily trade limit of {settings.daily_max_trades} reached.",
+            )
+
         active = self._trade_service.get_active_trades().data
         mode_count = (
             len(active.scalping_trades)
@@ -49,12 +54,7 @@ class ManagedManualTradeService(ManualTradeService):
                 ),
             )
 
-        settings = self._settings_service.get_settings_state()
-        overall_limit = (
-            settings.max_open_positions
-            if settings.max_open_positions > 0
-            else self.DEFAULT_OVERALL_OPEN_LIMIT
-        )
+        overall_limit = settings.max_open_positions
         if len(active.scalping_trades) + len(active.intraday_trades) >= overall_limit:
             raise HTTPException(
                 status_code=409,

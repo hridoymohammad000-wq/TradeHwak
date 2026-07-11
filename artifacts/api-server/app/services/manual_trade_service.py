@@ -87,7 +87,11 @@ class ManualTradeService:
             * Decimal(str(settings_state.risk_per_trade_pct))
             / Decimal("100")
         )
-        risk_budget = self._apply_profit_lock_guard(configured_risk_budget)
+        risk_budget = self._apply_daily_loss_guard(
+            configured_risk_budget,
+            settings_state.daily_max_loss,
+        )
+        risk_budget = self._apply_profit_lock_guard(risk_budget)
 
         qty = self._round_to_step(
             risk_budget / risk_distance,
@@ -257,6 +261,18 @@ class ManualTradeService:
         if not decision.allowed:
             raise HTTPException(status_code=400, detail=decision.reason)
         return Decimal(str(decision.approved_risk_budget))
+
+    def _apply_daily_loss_guard(
+        self,
+        configured_risk_budget: Decimal,
+        daily_max_loss: float,
+    ) -> Decimal:
+        remaining = self._trade_service.get_remaining_daily_loss_budget(
+            daily_max_loss
+        )
+        if remaining <= 0:
+            raise HTTPException(status_code=400, detail="Daily max loss limit reached.")
+        return min(configured_risk_budget, Decimal(str(remaining)))
 
     def _resolve_protection_prices(
         self,

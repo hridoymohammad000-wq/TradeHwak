@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from threading import Lock
 
 from fastapi import HTTPException
 
@@ -65,9 +66,18 @@ class AutoTradeService:
         self._last_candidate_signal: WorkflowSignalSnapshot | None = None
         self._last_order: WorkflowOrderSnapshot | None = None
         self._last_cycle_at: str | None = None
+        self._cycle_lock = Lock()
         self._restore_state()
 
     def run_cycle(self) -> dict[str, int | str]:
+        if not self._cycle_lock.acquire(blocking=False):
+            return {"status": "already_running", "opened": 0}
+        try:
+            return self._run_cycle()
+        finally:
+            self._cycle_lock.release()
+
+    def _run_cycle(self) -> dict[str, int | str]:
         settings = self._settings_service.get_settings_state()
         self._last_cycle_at = datetime.now(timezone.utc).isoformat()
         self._last_candidate_signal = None
@@ -96,6 +106,26 @@ class AutoTradeService:
                 self._last_execution_status = "blocked"
                 self._last_reject_reason = bybit_status.detail
                 return {"status": "exchange_disconnected", "opened": 0}
+
+            if self._trade_service.get_daily_trade_count() >= settings.daily_max_trades:
+                self._last_execution_status = "blocked"
+                self._last_reject_reason = (
+                    f"Daily trade limit of {settings.daily_max_trades} reached."
+                )
+                return {"status": "daily_trade_stop", "opened": 0}
+
+            if (
+                self._trade_service.get_remaining_daily_loss_budget(
+                    settings.daily_max_loss
+                )
+                <= 0
+            ):
+                self._settings_service.update_control_state(
+                    {"auto_trade_enabled": False}
+                )
+                self._last_execution_status = "blocked"
+                self._last_reject_reason = "Daily max loss limit reached."
+                return {"status": "daily_loss_stop", "opened": 0}
 
             blocked_modes, combined_stop = self._realized_loss_blocks()
             if combined_stop:

@@ -67,7 +67,6 @@ class ManagedWorkflowContractTests(unittest.TestCase):
             ManagedManualTradeService.MODE_OPEN_LIMITS[TradingMode.INTRADAY],
             3,
         )
-        self.assertEqual(ManagedManualTradeService.DEFAULT_OVERALL_OPEN_LIMIT, 5)
 
 
 if __name__ == "__main__":

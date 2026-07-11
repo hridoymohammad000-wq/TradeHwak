@@ -182,7 +182,7 @@ export default function ControlCenter() {
               <div className="grid grid-cols-2 gap-4">
                 {field('Risk per trade %', 'risk_per_trade_pct')}
                 {field('Daily max trades', 'daily_max_trades', '1')}
-                {field('Daily max loss', 'daily_max_loss')}
+                {field('Daily max loss (USDT)', 'daily_max_loss')}
                 {field('Max open positions', 'max_open_positions', '1')}
               </div>
               <label className="block mt-4">

@@ -202,4 +202,10 @@ class SettingsService:
             return "Selected strategy mode is unsupported."
         if settings.risk_per_trade_pct <= 0:
             return "Set risk per trade above 0% before enabling auto trade."
+        if settings.daily_max_loss <= 0:
+            return "Set daily max loss above 0 USDT before enabling auto trade."
+        if settings.daily_max_trades <= 0:
+            return "Set daily max trades above 0 before enabling auto trade."
+        if settings.max_open_positions <= 0:
+            return "Set max open positions above 0 before enabling auto trade."
         return None
