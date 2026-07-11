@@ -29,10 +29,12 @@ type ChallengeSnapshot = {
 const money = (value: string | number) => `${Number(value).toFixed(2)} USDT`;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set('Content-Type', 'application/json');
   const response = await fetch(`/api${path}`, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     ...init,
+    credentials: 'include',
+    headers,
   });
   if (!response.ok) {
     const payload: { detail?: string } = await response.json().catch(() => ({}));
