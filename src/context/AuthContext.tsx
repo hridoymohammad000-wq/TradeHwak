@@ -88,11 +88,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const nextStatus = connectionStatusFromError(error);
       setConnectionStatus(nextStatus);
       setErrorMessage(messageFromError(error));
+
       if (nextStatus === 'unauthorized') {
         markUnauthorized();
-      } else {
-        setAuthState('unauthenticated');
+        return;
       }
+
+      // Network, timeout, or backend failures must not invalidate a valid cookie.
+      // During initial load keep the app in checking state and retry automatically.
+      setAuthState((current) => current === 'authenticated' ? 'authenticated' : 'checking');
     }
   }, [applyValidSession, markUnauthorized]);
 
@@ -103,12 +107,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [markUnauthorized, verifyBackendAndSession]);
 
   useEffect(() => {
-    if (authState !== 'authenticated') {
+    if (authState === 'unauthenticated') {
       return;
     }
+
+    const retryMs = authState === 'checking' ? 5_000 : 30_000;
     const intervalId = window.setInterval(() => {
       void verifyBackendAndSession();
-    }, 30_000);
+    }, retryMs);
+
     return () => window.clearInterval(intervalId);
   }, [authState, verifyBackendAndSession]);
 
