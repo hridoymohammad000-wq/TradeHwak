@@ -1,0 +1,52 @@
+name: Double Down Challenge Phase 9 Tests
+
+on:
+  push:
+    branches:
+      - feature/double-down-challenge-phase-9
+    paths:
+      - "artifacts/api-server/app/double_down/**"
+      - "artifacts/api-server/app/api/routes/challenge.py"
+      - "artifacts/api-server/app/api/router.py"
+      - "artifacts/api-server/app/core/state.py"
+      - "artifacts/api-server/migrations/001_init.sql"
+      - "artifacts/api-server/tests/test_double_down_phase9.py"
+      - "src/pages/DoubleDownChallenge.tsx"
+      - ".github/workflows/double-down-phase9-tests.yml"
+  pull_request:
+    paths:
+      - "artifacts/api-server/app/double_down/**"
+      - "artifacts/api-server/app/api/routes/challenge.py"
+      - "artifacts/api-server/app/api/router.py"
+      - "artifacts/api-server/app/core/state.py"
+      - "artifacts/api-server/migrations/001_init.sql"
+      - "artifacts/api-server/tests/test_double_down_phase9.py"
+      - "src/pages/DoubleDownChallenge.tsx"
+      - ".github/workflows/double-down-phase9-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  phase9-integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: artifacts/api-server/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r artifacts/api-server/requirements.txt
+      - name: Run Phase 9 backend tests
+        working-directory: artifacts/api-server
+        run: python -m unittest -v tests.test_double_down_phase9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
