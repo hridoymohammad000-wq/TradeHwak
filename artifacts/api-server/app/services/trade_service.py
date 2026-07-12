@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 
@@ -215,7 +216,7 @@ class TradeService:
         self._ensure_current_day()
         try:
             positions = bybit_service.get_open_positions()
-            closed_pnls = bybit_service.get_closed_pnls(limit=50)
+            closed_pnls = bybit_service.get_closed_pnls(limit=100)
         except HTTPException:
             return
 
@@ -224,44 +225,60 @@ class TradeService:
             for item in positions
             if self._position_is_open(item)
         }
-        closed_by_symbol = {
-            str(item.get("symbol") or "").upper(): item
-            for item in closed_pnls
-        }
+        closed_by_symbol: dict[str, list[dict]] = defaultdict(list)
+        for item in closed_pnls:
+            symbol = str(item.get("symbol") or "").upper()
+            if symbol:
+                closed_by_symbol[symbol].append(item)
+        for rows in closed_by_symbol.values():
+            rows.sort(
+                key=lambda row: int(str(row.get("updatedTime") or row.get("createdTime") or 0)),
+                reverse=True,
+            )
 
+        selected_mode = self._settings_service.get_settings_state().active_strategy_mode
         remaining_active: list[ManagedTrade] = []
         tracked_symbols: set[str] = set()
+        consumed_closed_keys: set[str] = set()
         for trade in self._active_trades:
-            position = positions_by_symbol.get(trade.symbol)
+            symbol = trade.symbol.upper()
+            position = positions_by_symbol.get(symbol)
             if position:
                 self._apply_position_snapshot(trade, position)
                 remaining_active.append(trade)
-                tracked_symbols.add(trade.symbol)
+                tracked_symbols.add(symbol)
                 self._persist_active_trade(trade)
                 continue
 
-            closed_trade = closed_by_symbol.get(trade.symbol)
-            if closed_trade:
+            candidates = closed_by_symbol.get(symbol, [])
+            closed_trade = next(
+                (
+                    row
+                    for row in candidates
+                    if self._closed_trade_key(row) not in consumed_closed_keys
+                ),
+                None,
+            )
+            if closed_trade is not None:
+                consumed_closed_keys.add(self._closed_trade_key(closed_trade))
                 closed_record = self._to_closed_record(trade, closed_trade)
-                if not self._closed_record_exists(closed_record):
-                    self._closed_trades.insert(0, closed_record)
-                if self._repository is not None:
-                    trade_key = self._trade_key(trade)
-                    closed_payload = closed_record.model_dump(mode="json")
-                    self._repository.upsert_trade(trade_key, "closed", closed_payload)
-                    self._repository.save_journal_entry(trade_key, closed_payload)
+                self._persist_closed_trade(self._trade_key(trade), closed_record)
                 continue
 
-            self._persist_active_trade(trade)
-            remaining_active.append(trade)
-
-        selected_mode = self._settings_service.get_settings_state().active_strategy_mode
         for symbol, position in positions_by_symbol.items():
             if symbol in tracked_symbols:
                 continue
             imported = self._from_exchange_position(position, selected_mode)
             remaining_active.append(imported)
             self._persist_active_trade(imported)
+
+        for row in closed_pnls:
+            key = self._closed_trade_key(row)
+            if key in consumed_closed_keys:
+                continue
+            managed = self._managed_from_closed_row(row, selected_mode)
+            closed_record = self._to_closed_record(managed, row)
+            self._persist_closed_trade(key, closed_record)
 
         self._active_trades = remaining_active
         self._recalculate_daily_trade_count()
@@ -503,6 +520,60 @@ class TradeService:
             and record.closed_time == candidate.closed_time
             and record.realized_pnl == candidate.realized_pnl
             for record in self._closed_trades
+        )
+
+    def _persist_closed_trade(
+        self,
+        trade_key: str,
+        closed_record: ClosedTradeRecord,
+    ) -> None:
+        if not self._closed_record_exists(closed_record):
+            self._closed_trades.insert(0, closed_record)
+        if self._repository is None:
+            return
+        closed_payload = closed_record.model_dump(mode="json")
+        self._repository.upsert_trade(trade_key, "closed", closed_payload)
+        self._repository.save_journal_entry(trade_key, closed_payload)
+
+    @staticmethod
+    def _closed_trade_key(row: dict) -> str:
+        order_id = str(row.get("orderId") or row.get("execId") or "").strip()
+        symbol = str(row.get("symbol") or "UNKNOWN").upper()
+        updated = str(row.get("updatedTime") or row.get("createdTime") or "unknown")
+        pnl = str(row.get("closedPnl") or "0")
+        return f"exchange-closed:{order_id or f'{symbol}:{updated}:{pnl}'}"
+
+    def _managed_from_closed_row(
+        self,
+        row: dict,
+        selected_mode: TradingMode,
+    ) -> ManagedTrade:
+        symbol = str(row.get("symbol") or "").upper()
+        side = str(row.get("side") or "").lower()
+        direction = Direction.SELL if side == "buy" else Direction.BUY
+        entry = self._safe_float(row.get("avgEntryPrice") or row.get("entryPrice"), 0.0)
+        exit_price = self._safe_float(row.get("avgExitPrice") or row.get("fillPrice"), entry)
+        qty = str(row.get("qty") or row.get("closedSize") or "") or None
+        qty_float = self._safe_float(qty, 0.0)
+        opened_at = self._to_iso_time(row.get("createdTime"))
+        return ManagedTrade(
+            symbol=symbol,
+            mode=selected_mode,
+            direction=direction,
+            entry_price=entry,
+            current_price=exit_price,
+            stop_loss=0.0,
+            take_profit=0.0,
+            pnl=self._safe_float(row.get("closedPnl"), 0.0),
+            timeframe=None,
+            status="exchange_closed_imported",
+            qty=qty,
+            notional=qty_float * entry if qty_float > 0 and entry > 0 else None,
+            planned_risk_usdt=None,
+            risk_reward=None,
+            order_id=self._closed_trade_key(row),
+            opened_at=opened_at,
+            synced_with_exchange=True,
         )
 
     @staticmethod

@@ -1,7 +1,6 @@
 import unittest
 
 from app.core.enums import Direction, TradingMode
-from app.services.exchange_reconciliation import install_exchange_reconciliation_patch
 from app.services.settings_service import SettingsService
 from app.services.trade_service import TradeService
 
@@ -79,7 +78,6 @@ class FakeBybit:
 
 class ExchangeReconciliationAuthorityTests(unittest.TestCase):
     def setUp(self):
-        install_exchange_reconciliation_patch()
         self.repository = MemoryRepository()
         self.settings = SettingsService(repository=self.repository)
         self.service = TradeService(

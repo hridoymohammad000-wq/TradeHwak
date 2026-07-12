@@ -348,6 +348,12 @@ Move reconciliation directly into the canonical `TradeService`.
 
 Exchange positions and closed orders must be matched using stable exchange identifiers instead of symbol-only matching.
 
+### Status
+
+Completed on July 12, 2026.
+
+Authoritative exchange reconciliation now lives directly inside the canonical `TradeService`. Open positions are treated as exchange-authoritative, closed orders are imported with stable exchange-derived identifiers, and repeated refreshes remain idempotent without relying on a runtime monkey patch.
+
 ---
 
 ### 8. Scanner Error Visibility
@@ -391,7 +397,7 @@ V2-003 — Trading Rule Alignment (Completed on July 12, 2026)
 V2-004 — Independent Trade Management Worker (Completed on July 12, 2026)
 V2-005 — Position Sizing and Margin Validation (Completed on July 12, 2026)
 V2-006 — Distributed Lock and Idempotency (Completed on July 12, 2026)
-V2-007 — Exchange Reconciliation Rewrite
+V2-007 — Exchange Reconciliation Rewrite (Completed on July 12, 2026)
 V2-008 — Scanner Error Reporting
 V2-009 — Full Regression and Runtime Tests
 V2-010 — Production Readiness Review

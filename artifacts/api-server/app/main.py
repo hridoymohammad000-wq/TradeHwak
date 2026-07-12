@@ -21,10 +21,6 @@ from app.core.state import (
     trade_management_service,
     trade_service,
 )
-from app.services.exchange_reconciliation import install_exchange_reconciliation_patch
-
-
-install_exchange_reconciliation_patch()
 
 SCANNER_INTERVAL_SECONDS = 300
 TRADE_MANAGEMENT_INTERVAL_SECONDS = 15
