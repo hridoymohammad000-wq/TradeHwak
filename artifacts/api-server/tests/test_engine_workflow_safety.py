@@ -52,6 +52,19 @@ class ManagementSpy:
         return {"skipped": 0}
 
 
+class ReconciliationSpy:
+    def __init__(self):
+        self.calls = 0
+
+    def sync_with_exchange(self, bybit_service):
+        self.calls += 1
+
+    def get_active_trades(self):
+        return SimpleNamespace(
+            data=SimpleNamespace(scalping_trades=[object()], intraday_trades=[])
+        )
+
+
 class EngineWorkflowSafetyTests(unittest.TestCase):
     @staticmethod
     def settings(*, daily_max_trades=5, max_open_positions=5):
@@ -159,24 +172,21 @@ class EngineWorkflowSafetyTests(unittest.TestCase):
         self.assertEqual(second_result, {"status": "already_running", "opened": 0})
         self.assertEqual(first_result, [{"status": "executed", "opened": 1}])
 
-    def test_management_does_not_run_for_rejected_concurrent_cycle(self):
+    def test_management_does_not_run_inside_scanner_cycle(self):
         service = ManagedAutoTradeService.__new__(ManagedAutoTradeService)
-        service._cycle_lock = Lock()
-        service._cycle_lock.acquire()
         management = ManagementSpy()
         service._trade_management_service = management
+        service._run_cycle = lambda: {"status": "executed", "opened": 1}
+        service._cycle_lock = Lock()
 
-        try:
-            result = service.run_cycle()
-        finally:
-            service._cycle_lock.release()
+        result = service.run_cycle()
 
-        self.assertEqual(result["status"], "already_running")
+        self.assertEqual(result["status"], "executed")
         self.assertEqual(management.calls, 0)
 
 
 class BackgroundCycleSafetyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_background_cycle_is_offloaded_from_event_loop(self):
+    async def test_scanner_background_cycle_is_offloaded_from_event_loop(self):
         result = {"status": "idle", "opened": 0}
         to_thread = AsyncMock(return_value=result)
         sleep = AsyncMock(side_effect=asyncio.CancelledError)
@@ -190,6 +200,48 @@ class BackgroundCycleSafetyTests(unittest.IsolatedAsyncioTestCase):
                 await main._auto_trade_loop()
 
         to_thread.assert_awaited_once_with(main.auto_trade_service.run_cycle)
+
+    async def test_trade_management_loop_is_offloaded_from_event_loop(self):
+        result = {"skipped": 1}
+        to_thread = AsyncMock(return_value=result)
+        sleep = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with (
+            patch.object(main.asyncio, "to_thread", to_thread),
+            patch.object(main.asyncio, "sleep", sleep),
+            patch.object(main.persistence_repository, "append_log"),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await main._trade_management_loop()
+
+        to_thread.assert_awaited_once_with(main.trade_management_service.manage_open_trades)
+
+    async def test_exchange_reconciliation_loop_is_offloaded_from_event_loop(self):
+        result = {"status": "reconciled", "total_open_trades": 1}
+        to_thread = AsyncMock(return_value=result)
+        sleep = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with (
+            patch.object(main.asyncio, "to_thread", to_thread),
+            patch.object(main.asyncio, "sleep", sleep),
+            patch.object(main.persistence_repository, "append_log"),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await main._exchange_reconciliation_loop()
+
+        to_thread.assert_awaited_once_with(main._reconcile_exchange_state)
+
+    def test_reconcile_exchange_state_returns_summary(self):
+        reconciliation = ReconciliationSpy()
+
+        with (
+            patch.object(main, "trade_service", reconciliation),
+            patch.object(main, "bybit_service", object()),
+        ):
+            result = main._reconcile_exchange_state()
+
+        self.assertEqual(reconciliation.calls, 1)
+        self.assertEqual(result, {"status": "reconciled", "total_open_trades": 1})
 
 
 if __name__ == "__main__":

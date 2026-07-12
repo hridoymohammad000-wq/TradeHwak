@@ -13,9 +13,4 @@ class ManagedAutoTradeService(AutoTradeService):
         self._trade_management_service = trade_management_service
 
     def _run_cycle(self) -> dict[str, int | str]:
-        result = super()._run_cycle()
-        management = self._trade_management_service.manage_open_trades()
-        return {
-            **result,
-            **{f"management_{key}": value for key, value in management.items()},
-        }
+        return super()._run_cycle()

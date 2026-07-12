@@ -12,7 +12,7 @@ from app.api.routes import auth
 
 class ApiAuthenticationRouteTests(unittest.TestCase):
     @staticmethod
-    async def _idle_auto_trade_loop():
+    async def _idle_background_loop():
         await asyncio.Event().wait()
 
     def _client(self):
@@ -21,7 +21,9 @@ class ApiAuthenticationRouteTests(unittest.TestCase):
         stack.enter_context(patch.object(main.settings_service, "reload_from_persistence"))
         stack.enter_context(patch.object(main.trade_service, "reload_from_persistence"))
         stack.enter_context(patch.object(main.profit_tracking_service, "reload_from_persistence"))
-        stack.enter_context(patch.object(main, "_auto_trade_loop", self._idle_auto_trade_loop))
+        stack.enter_context(patch.object(main, "_auto_trade_loop", self._idle_background_loop))
+        stack.enter_context(patch.object(main, "_trade_management_loop", self._idle_background_loop))
+        stack.enter_context(patch.object(main, "_exchange_reconciliation_loop", self._idle_background_loop))
         stack.enter_context(patch.dict(os.environ, {"TRADEHAWK_ACCESS_TOKEN": "test-secret"}))
         client = stack.enter_context(TestClient(main.app))
         self.addCleanup(stack.close)

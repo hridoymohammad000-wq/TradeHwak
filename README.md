@@ -283,6 +283,12 @@ Exchange Reconciliation:
 Runs every 15–30 seconds
 ```
 
+### Status
+
+Completed on July 12, 2026.
+
+The backend now runs independent workers for scanner/execution, trade management, and exchange reconciliation. Scanner cycles run every 5 minutes, trade management runs every 15 seconds, and exchange reconciliation runs every 30 seconds.
+
 ---
 
 ### 5. Position Sizing
@@ -370,7 +376,7 @@ TradeHawk V2 should be developed sequentially.
 V2-001 — Backend API Authentication (Completed on July 12, 2026)
 V2-002 — Production Database Safety (Completed on July 12, 2026)
 V2-003 — Trading Rule Alignment (Completed on July 12, 2026)
-V2-004 — Independent Trade Management Worker
+V2-004 — Independent Trade Management Worker (Completed on July 12, 2026)
 V2-005 — Position Sizing and Margin Validation
 V2-006 — Distributed Lock and Idempotency
 V2-007 — Exchange Reconciliation Rewrite

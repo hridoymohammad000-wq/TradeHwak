@@ -14,9 +14,11 @@ from app.core.config import get_app_config
 from app.core.exceptions import register_exception_handlers
 from app.core.state import (
     auto_trade_service,
+    bybit_service,
     persistence_repository,
     profit_tracking_service,
     settings_service,
+    trade_management_service,
     trade_service,
 )
 from app.services.exchange_reconciliation import install_exchange_reconciliation_patch
@@ -24,24 +26,68 @@ from app.services.exchange_reconciliation import install_exchange_reconciliation
 
 install_exchange_reconciliation_patch()
 
-AUTO_TRADE_INTERVAL_SECONDS = 300
+SCANNER_INTERVAL_SECONDS = 300
+TRADE_MANAGEMENT_INTERVAL_SECONDS = 15
+EXCHANGE_RECONCILIATION_INTERVAL_SECONDS = 30
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_DIST = REPOSITORY_ROOT / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 
 
-async def _auto_trade_loop() -> None:
+async def _run_logged_worker(
+    *,
+    event_type: str,
+    failure_event_type: str,
+    operation,
+    sleep_seconds: int,
+) -> None:
     while True:
         try:
-            result = await asyncio.to_thread(auto_trade_service.run_cycle)
-            persistence_repository.append_log("execution_logs", "auto_trade_cycle", result)
+            result = await asyncio.to_thread(operation)
+            persistence_repository.append_log("execution_logs", event_type, result)
         except Exception as exc:
             persistence_repository.append_log(
                 "execution_logs",
-                "auto_trade_cycle_failed",
+                failure_event_type,
                 {"error": str(exc)},
             )
-        await asyncio.sleep(AUTO_TRADE_INTERVAL_SECONDS)
+        await asyncio.sleep(sleep_seconds)
+
+
+async def _auto_trade_loop() -> None:
+    await _run_logged_worker(
+        event_type="auto_trade_cycle",
+        failure_event_type="auto_trade_cycle_failed",
+        operation=auto_trade_service.run_cycle,
+        sleep_seconds=SCANNER_INTERVAL_SECONDS,
+    )
+
+
+async def _trade_management_loop() -> None:
+    await _run_logged_worker(
+        event_type="trade_management_cycle",
+        failure_event_type="trade_management_cycle_failed",
+        operation=trade_management_service.manage_open_trades,
+        sleep_seconds=TRADE_MANAGEMENT_INTERVAL_SECONDS,
+    )
+
+
+def _reconcile_exchange_state() -> dict[str, int | str]:
+    trade_service.sync_with_exchange(bybit_service)
+    active = trade_service.get_active_trades().data
+    return {
+        "status": "reconciled",
+        "total_open_trades": len(active.scalping_trades) + len(active.intraday_trades),
+    }
+
+
+async def _exchange_reconciliation_loop() -> None:
+    await _run_logged_worker(
+        event_type="exchange_reconciliation_cycle",
+        failure_event_type="exchange_reconciliation_cycle_failed",
+        operation=_reconcile_exchange_state,
+        sleep_seconds=EXCHANGE_RECONCILIATION_INTERVAL_SECONDS,
+    )
 
 
 @asynccontextmanager
@@ -50,13 +96,19 @@ async def lifespan(_: FastAPI):
     settings_service.reload_from_persistence()
     trade_service.reload_from_persistence()
     profit_tracking_service.reload_from_persistence()
-    task = asyncio.create_task(_auto_trade_loop())
+    tasks = [
+        asyncio.create_task(_auto_trade_loop()),
+        asyncio.create_task(_trade_management_loop()),
+        asyncio.create_task(_exchange_reconciliation_loop()),
+    ]
     try:
         yield
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 config = get_app_config()
