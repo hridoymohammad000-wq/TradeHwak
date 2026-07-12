@@ -28,6 +28,7 @@ class Candle:
     low: float
     close: float
     volume: float
+    timestamp: int | None = None
 
 
 @dataclass
@@ -184,6 +185,7 @@ class StrategyService:
                     "volume_score": round(volume_score, 2),
                     "extension_penalty": round(extension_penalty, 2),
                     "final_score": round(final_score, 2),
+                    "setup_timestamp": float(candles[-1].timestamp or 0),
                 },
             )
             return StrategyEvaluation(symbol=symbol, outcome="actionable", signal=signal)
@@ -207,7 +209,16 @@ class StrategyService:
         result = []
         for row in rows:
             try:
-                result.append(Candle(float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])))
+                result.append(
+                    Candle(
+                        float(row[1]),
+                        float(row[2]),
+                        float(row[3]),
+                        float(row[4]),
+                        float(row[5]),
+                        int(str(row[0])) if row[0] not in (None, "") else None,
+                    )
+                )
             except (TypeError, ValueError, IndexError):
                 continue
         return result

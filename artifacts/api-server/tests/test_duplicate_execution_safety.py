@@ -83,6 +83,17 @@ class DuplicateExecutionSafetyTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertLessEqual(len(first), 36)
 
+    def test_manual_order_link_id_distinguishes_manual_path(self):
+        manual_id = ManualTradeService._order_link_id(
+            symbol="BTCUSDT",
+            mode=TradingMode.SCALPING,
+            direction=Direction.BUY,
+            timeframe=Timeframe.M1,
+            signal_id=None,
+        )
+
+        self.assertIn("manual", manual_id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ from app.schemas.signals import SignalFilters, SignalItem, SignalsData, SignalsR
 from app.services.settings_service import SettingsService
 from app.services.signal_registry import SignalRegistry
 from app.services.strategy_service import StrategyService
+from app.services.trade_service import TradeService
 
 
 class SignalsService:
@@ -73,9 +74,11 @@ class SignalsService:
 
             signals.append(
                 SignalItem(
-                    signal_id=(
-                        f"sig-{signal_item.symbol.lower()}-"
-                        f"{signal_item.timeframe.value.lower()}-{signal_item.direction.value}"
+                    signal_id=TradeService.build_signal_id(
+                        symbol=signal_item.symbol,
+                        timeframe=signal_item.timeframe,
+                        direction=signal_item.direction,
+                        setup_timestamp=metrics.get("setup_timestamp"),
                     ),
                     symbol=signal_item.symbol,
                     direction=signal_item.direction,

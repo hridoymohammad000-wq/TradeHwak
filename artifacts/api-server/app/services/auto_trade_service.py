@@ -1,4 +1,6 @@
 import logging
+from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
 
@@ -23,11 +25,20 @@ from app.services.manual_trade_service import ManualTradeService
 from app.services.profit_tracking_service import ProfitTrackingService
 from app.services.settings_service import SettingsService
 from app.services.signal_registry import SignalRegistry
-from app.services.strategy_service import StrategyService
+from app.services.strategy_service import StrategyEvaluation, StrategyService, StrategySignal
 from app.services.trade_service import TradeService
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AutoModeScanReport:
+    mode: TradingMode
+    symbols: list[str]
+    signals: list[StrategySignal]
+    counts: Counter
+    issues: list[dict[str, str | None]]
 
 
 class AutoTradeService:
@@ -183,29 +194,31 @@ class AutoTradeService:
             opened = 0
             scanned_symbols = 0
             evaluated_count = 0
+            aggregate_counts = Counter()
+            aggregate_issues: list[dict[str, str | None]] = []
 
             for mode in enabled_modes:
                 timeframe = self._strategy_service.default_timeframe(mode)
                 symbols = self._strategy_service.default_symbols(mode)
-                scanned_symbols += len(symbols)
-                evaluated_signals = []
+                report = self._evaluate_mode_scan(
+                    mode=mode,
+                    timeframe=timeframe,
+                    symbols=symbols,
+                )
+                scanned_symbols += report.counts["scanned"]
+                aggregate_counts.update(report.counts)
+                aggregate_issues.extend(report.issues)
+                evaluated_signals = report.signals
                 mode_limit = self.MODE_OPEN_LIMITS[mode]
+                ranked_signals = sorted(
+                    evaluated_signals,
+                    key=lambda signal: (self._score(signal), signal.symbol),
+                    reverse=True,
+                )
+                evaluated_count += len(ranked_signals)
 
-                for symbol in symbols:
-                    try:
-                        signal = self._strategy_service.evaluate_symbol(
-                            symbol=symbol,
-                            mode=mode,
-                            timeframe=timeframe,
-                        )
-                    except HTTPException as exc:
-                        self._last_reject_reason = self._format_http_detail(exc.detail)
-                        continue
-
-                    if signal is None:
-                        continue
-                    evaluated_signals.append(signal)
-                    evaluated_count += 1
+                for signal in ranked_signals:
+                    symbol = signal.symbol
 
                     if open_counts[mode] + opened_by_mode[mode] >= mode_limit:
                         self._last_reject_reason = (
@@ -236,6 +249,7 @@ class AutoTradeService:
                         symbol=signal.symbol,
                         timeframe=signal.timeframe,
                         direction=signal.direction,
+                        setup_timestamp=signal.metrics.get("setup_timestamp"),
                     )
 
                     try:
@@ -272,12 +286,19 @@ class AutoTradeService:
 
                 self._signal_registry.replace(
                     mode,
-                    evaluated_signals,
+                    ranked_signals,
                     source="auto_trade_cycle",
                 )
 
-            self._last_scanner_status = (
-                f"scanned_{scanned_symbols}_symbols_across_{len(enabled_modes)}_modes"
+            self._log_auto_scan_cycle(
+                enabled_modes=enabled_modes,
+                counts=aggregate_counts,
+                issues=aggregate_issues,
+            )
+            self._last_scanner_status = self._scanner_status_summary(
+                scanned_symbols=scanned_symbols,
+                enabled_mode_count=len(enabled_modes),
+                counts=aggregate_counts,
             )
 
             if evaluated_count == 0:
@@ -294,6 +315,95 @@ class AutoTradeService:
             }
         finally:
             self._persist_state()
+
+    @staticmethod
+    def _score(signal: StrategySignal) -> float:
+        try:
+            return float(signal.metrics.get("final_score", 0.0))
+        except (AttributeError, TypeError, ValueError):
+            return 0.0
+
+    def _evaluate_mode_scan(
+        self,
+        *,
+        mode: TradingMode,
+        timeframe,
+        symbols: list[str],
+    ) -> AutoModeScanReport:
+        counts = Counter()
+        issues: list[dict[str, str | None]] = []
+        signals: list[StrategySignal] = []
+        counts["scanned"] = len(symbols)
+        for symbol in symbols:
+            evaluation = self._strategy_service.evaluate_symbol_detailed(
+                symbol=symbol,
+                mode=mode,
+                timeframe=timeframe,
+            )
+            counts[evaluation.outcome] += 1
+            if evaluation.signal is not None:
+                signals.append(evaluation.signal)
+                continue
+            issues.append(
+                {
+                    "symbol": symbol,
+                    "mode": mode.value,
+                    "status": evaluation.outcome,
+                    "detail": evaluation.detail,
+                }
+            )
+            if evaluation.outcome in {"exchange_error", "failed"} and evaluation.detail:
+                self._last_reject_reason = evaluation.detail
+        return AutoModeScanReport(
+            mode=mode,
+            symbols=symbols,
+            signals=signals,
+            counts=counts,
+            issues=issues,
+        )
+
+    def _log_auto_scan_cycle(
+        self,
+        *,
+        enabled_modes: list[TradingMode],
+        counts: Counter,
+        issues: list[dict[str, str | None]],
+    ) -> None:
+        if self._repository is None:
+            return
+        self._repository.append_log(
+            "scan_logs",
+            "auto_scan_cycle_completed",
+            {
+                "modes": [mode.value for mode in enabled_modes],
+                "breakdown": {
+                    "scanned": counts["scanned"],
+                    "actionable": counts["actionable"],
+                    "rejected": counts["rejected"],
+                    "skipped": counts["skipped"],
+                    "failed": counts["failed"],
+                    "exchange_error": counts["exchange_error"],
+                    "insufficient_data": counts["insufficient_data"],
+                },
+                "issues": issues,
+            },
+        )
+
+    @staticmethod
+    def _scanner_status_summary(
+        *,
+        scanned_symbols: int,
+        enabled_mode_count: int,
+        counts: Counter,
+    ) -> str:
+        return (
+            f"scanned_{scanned_symbols}_symbols_across_{enabled_mode_count}_modes;"
+            f"actionable={counts['actionable']};"
+            f"rejected={counts['rejected']};"
+            f"failed={counts['failed']};"
+            f"exchange_error={counts['exchange_error']};"
+            f"insufficient_data={counts['insufficient_data']}"
+        )
 
     def _realized_loss_blocks(self) -> tuple[set[TradingMode], bool]:
         if self._profit_tracking_service is None:

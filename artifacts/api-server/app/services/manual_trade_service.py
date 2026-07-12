@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 class ManualTradeService:
+    MAX_SPREAD_PCT = Decimal("0.35")
+    MIN_TURNOVER_24H = Decimal("1000000")
+
     def __init__(
         self,
         settings_service: SettingsService,
@@ -54,12 +57,15 @@ class ManualTradeService:
         symbol_meta = self._bybit_service.get_validated_symbol(payload.symbol)
         symbol = symbol_meta["symbol"]
         ticker = self._bybit_service.get_raw_ticker(symbol)
+        snapshot_getter = getattr(self._bybit_service, "get_market_snapshot", None)
+        market_snapshot = snapshot_getter(symbol).data if callable(snapshot_getter) else None
         wallet = self._bybit_service.get_wallet_snapshot()
         market_price = self._positive_decimal(
             ticker.get("result", {}).get("list", [{}])[0].get("markPrice")
             or ticker.get("result", {}).get("list", [{}])[0].get("lastPrice"),
             "Market price is unavailable.",
         )
+        self._validate_market_quality(symbol=symbol, snapshot=market_snapshot)
 
         stop_loss, take_profit = self._resolve_protection_prices(
             symbol=symbol,
@@ -416,9 +422,34 @@ class ManualTradeService:
             compact = "".join(character for character in signal_id if character.isalnum())
             return f"th{compact}"[:36]
         timeframe_value = timeframe.value if timeframe is not None else "na"
-        base = f"{symbol}-{mode.value}-{direction.value}-{timeframe_value}-{trading_date().isoformat()}"
+        base = (
+            f"{symbol}-{mode.value}-{direction.value}-{timeframe_value}-"
+            f"manual-{trading_date().isoformat()}"
+        )
         compact = "".join(character for character in base.lower() if character.isalnum())
         return f"th{compact}"[:36]
+
+    def _validate_market_quality(self, *, symbol: str, snapshot) -> None:
+        if snapshot is None:
+            return
+        spread_pct = Decimal(str(snapshot.spread_percent or 0))
+        turnover_24h = Decimal(str(snapshot.turnover_24h or 0))
+        if spread_pct > self.MAX_SPREAD_PCT:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{symbol} spread {spread_pct:.4f}% exceeds "
+                    f"the maximum allowed {self.MAX_SPREAD_PCT:.2f}%."
+                ),
+            )
+        if turnover_24h < self.MIN_TURNOVER_24H:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{symbol} turnover {turnover_24h:.2f} is below the minimum "
+                    f"required {self.MIN_TURNOVER_24H:.2f}."
+                ),
+            )
 
     def _resolve_protection_prices(
         self,

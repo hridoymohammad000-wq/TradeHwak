@@ -375,11 +375,21 @@ class TradeService:
         symbol: str,
         timeframe: Timeframe | None,
         direction: Direction,
+        setup_timestamp: int | str | None = None,
     ) -> str:
         timeframe_value = timeframe.value if timeframe is not None else "na"
+        setup_part = ""
+        if setup_timestamp not in (None, ""):
+            setup_compact = "".join(
+                character
+                for character in str(setup_timestamp)
+                if character.isalnum()
+            )[:20]
+            if setup_compact:
+                setup_part = f"{setup_compact}-"
         return (
             f"sig-{symbol.lower()}-{timeframe_value.lower()}-{direction.value}-"
-            f"{trading_date().isoformat()}"
+            f"{setup_part}{trading_date().isoformat()}"
         )
 
     @staticmethod

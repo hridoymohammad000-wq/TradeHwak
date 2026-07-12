@@ -48,6 +48,7 @@ class TradeManagementService:
             "tp1": 0,
             "tp2": 0,
             "pending": 0,
+            "refreshed": 0,
             "trailed": 0,
             "duration_closed": 0,
             "skipped": 0,
@@ -55,6 +56,9 @@ class TradeManagementService:
         }
         for trade in trades:
             try:
+                refreshed = self._refresh_live_trade_price(trade)
+                if refreshed:
+                    result["refreshed"] += 1
                 outcome = self._manage_trade(trade)
                 result[outcome] = result.get(outcome, 0) + 1
             except HTTPException as exc:
@@ -384,6 +388,22 @@ class TradeManagementService:
     def _persist(self) -> None:
         if self._repository is not None:
             self._repository.save_trade_management_state(self._state)
+
+    def _refresh_live_trade_price(self, trade) -> bool:
+        snapshot_getter = getattr(self._bybit_service, "get_market_snapshot", None)
+        if not callable(snapshot_getter):
+            return False
+        snapshot = snapshot_getter(trade.symbol).data
+        candidates = [
+            getattr(snapshot, "mark_price", None),
+            getattr(snapshot, "last_price", None),
+            getattr(snapshot, "index_price", None),
+        ]
+        for value in candidates:
+            if value not in (None, 0, 0.0, ""):
+                trade.current_price = float(value)
+                return True
+        return False
 
     def _log(self, event_type: str, payload: dict) -> None:
         if self._repository is not None:

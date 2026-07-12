@@ -486,17 +486,17 @@ TradeHawk V2 will be considered complete only when:
 
 ### Trading Engine
 
-- [ ] `V2-019 - Rank Before Execute`
+- [x] `V2-019 - Rank Before Execute`
   সব symbol evaluate -> score অনুযায়ী rank -> best signals select -> তারপর order execute করতে হবে।
-- [ ] `V2-020 - Auto Scanner Error Reporting`
+- [x] `V2-020 - Auto Scanner Error Reporting`
   Automatic cycle-এও `rejected`, `failed`, `exchange_error` ও `insufficient_data` আলাদা report করতে হবে।
-- [ ] `V2-021 - Signal Identity Redesign`
+- [x] `V2-021 - Signal Identity Redesign`
   Signal ID-তে candle timestamp/setup identity যোগ করতে হবে; একই symbol-direction-এর valid নতুন signal যেন পুরো দিন block না হয়।
-- [ ] `V2-022 - OrderLinkId Collision Prevention`
+- [x] `V2-022 - OrderLinkId Collision Prevention`
   Manual ও automatic orders-এর unique deterministic order identity নিশ্চিত করতে হবে।
-- [ ] `V2-023 - Spread and Liquidity Gate`
+- [x] `V2-023 - Spread and Liquidity Gate`
   Bid-ask spread বেশি হলে symbol skip করতে হবে; minimum liquidity/slippage rule যোগ করতে হবে।
-- [ ] `V2-024 - Fresh Price for Trade Management`
+- [x] `V2-024 - Fresh Price for Trade Management`
   15-second trade manager-কে stale reconciliation price নয়, fresh ticker/position price ব্যবহার করতে হবে।
 - [ ] `V2-025 - Single Risk Authority`
   Fixed V2 scalping/intraday rules এবং editable Control Center risk fields-এর conflict সরাতে হবে।
