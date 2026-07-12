@@ -156,6 +156,13 @@ class ManualTradeService:
             "takeProfit": self._format_decimal(rounded_take, constraints["tickSize"]),
             "slTriggerBy": "MarkPrice",
             "tpTriggerBy": "MarkPrice",
+            "orderLinkId": self._order_link_id(
+                symbol=symbol,
+                mode=payload.mode,
+                direction=payload.direction,
+                timeframe=payload.timeframe,
+                signal_id=signal_id,
+            ),
         }
         try:
             leverage_setter = getattr(self._bybit_service, "set_symbol_leverage", None)
@@ -395,6 +402,23 @@ class ManualTradeService:
             total_notional += Decimal(str(trade.notional or 0))
             total_planned_risk += Decimal(str(trade.planned_risk_usdt or 0))
         return total_notional, total_planned_risk
+
+    @staticmethod
+    def _order_link_id(
+        *,
+        symbol: str,
+        mode: TradingMode,
+        direction: Direction,
+        timeframe: Timeframe | None,
+        signal_id: str | None,
+    ) -> str:
+        if signal_id:
+            compact = "".join(character for character in signal_id if character.isalnum())
+            return f"th{compact}"[:36]
+        timeframe_value = timeframe.value if timeframe is not None else "na"
+        base = f"{symbol}-{mode.value}-{direction.value}-{timeframe_value}-{trading_date().isoformat()}"
+        compact = "".join(character for character in base.lower() if character.isalnum())
+        return f"th{compact}"[:36]
 
     def _resolve_protection_prices(
         self,

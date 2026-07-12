@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class AutoTradeService:
+    DISTRIBUTED_CYCLE_LOCK = "tradehawk:auto_trade_cycle"
     MODE_OPEN_LIMITS = {
         TradingMode.SCALPING: COMBINED_MAX_OPEN_TRADES,
         TradingMode.INTRADAY: COMBINED_MAX_OPEN_TRADES,
@@ -73,9 +74,13 @@ class AutoTradeService:
     def run_cycle(self) -> dict[str, int | str]:
         if not self._cycle_lock.acquire(blocking=False):
             return {"status": "already_running", "opened": 0}
+        if not self._acquire_distributed_cycle_lock():
+            self._cycle_lock.release()
+            return {"status": "already_running", "opened": 0}
         try:
             return self._run_cycle()
         finally:
+            self._release_distributed_cycle_lock()
             self._cycle_lock.release()
 
     def _run_cycle(self) -> dict[str, int | str]:
@@ -338,6 +343,23 @@ class AutoTradeService:
             "PostgreSQL persistence is required before auto trade can run: "
             f"{reason}",
         )
+
+    def _acquire_distributed_cycle_lock(self) -> bool:
+        repository = getattr(self, "_repository", None)
+        if repository is None:
+            return True
+        locker = getattr(repository, "try_advisory_lock", None)
+        if not callable(locker):
+            return True
+        return bool(locker(self.DISTRIBUTED_CYCLE_LOCK))
+
+    def _release_distributed_cycle_lock(self) -> None:
+        repository = getattr(self, "_repository", None)
+        if repository is None:
+            return
+        unlocker = getattr(repository, "advisory_unlock", None)
+        if callable(unlocker):
+            unlocker(self.DISTRIBUTED_CYCLE_LOCK)
 
     def get_workflow_status(self) -> WorkflowStatusResponse:
         settings = self._settings_service.get_settings_state()

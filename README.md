@@ -328,6 +328,12 @@ Implement a PostgreSQL-based distributed lock or advisory lock.
 
 The execution flow must also use a unique order-link ID for exchange-level idempotency.
 
+### Status
+
+Completed on July 12, 2026.
+
+Automatic trading now uses a PostgreSQL advisory lock for distributed cycle coordination, and entry orders now include deterministic `orderLinkId` values so retries and multi-worker replays reuse the same exchange-side identity.
+
 ---
 
 ### 7. Exchange Reconciliation
@@ -384,7 +390,7 @@ V2-002 — Production Database Safety (Completed on July 12, 2026)
 V2-003 — Trading Rule Alignment (Completed on July 12, 2026)
 V2-004 — Independent Trade Management Worker (Completed on July 12, 2026)
 V2-005 — Position Sizing and Margin Validation (Completed on July 12, 2026)
-V2-006 — Distributed Lock and Idempotency
+V2-006 — Distributed Lock and Idempotency (Completed on July 12, 2026)
 V2-007 — Exchange Reconciliation Rewrite
 V2-008 — Scanner Error Reporting
 V2-009 — Full Regression and Runtime Tests

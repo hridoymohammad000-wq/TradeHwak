@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import zlib
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,20 @@ class PersistenceRepository:
             raise ValueError(f"Unsupported log table: {table}")
         self._execute(f"INSERT INTO {table} (event_type, payload) VALUES (%s, %s::jsonb)", (event_type, self._json(payload)))
 
+    def try_advisory_lock(self, name: str) -> bool:
+        if not self.enabled:
+            return True
+        key = self._advisory_lock_key(name)
+        row = self._fetchone("SELECT pg_try_advisory_lock(%s) AS acquired", (key,))
+        return bool(row and row.get("acquired"))
+
+    def advisory_unlock(self, name: str) -> bool:
+        if not self.enabled:
+            return True
+        key = self._advisory_lock_key(name)
+        row = self._fetchone("SELECT pg_advisory_unlock(%s) AS released", (key,))
+        return bool(row and row.get("released"))
+
     def _connect(self):
         if not self.enabled or psycopg is None:
             raise RuntimeError("Database persistence is disabled.")
@@ -229,3 +244,7 @@ class PersistenceRepository:
         if hasattr(value, "value"):
             return str(value.value)
         return str(value)
+
+    @staticmethod
+    def _advisory_lock_key(name: str) -> int:
+        return zlib.crc32(name.encode("utf-8")) & 0x7FFFFFFF
