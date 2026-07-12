@@ -78,4 +78,5 @@ chart_context_service = ChartContextService(bybit_service=bybit_service)
 engine_service = EngineService(
     settings_service=settings_service,
     bybit_service=bybit_service,
+    repository=persistence_repository,
 )

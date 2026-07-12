@@ -174,6 +174,12 @@ Only these endpoints should remain public:
 * Logout
 * Session validation
 
+### Status
+
+Completed on July 12, 2026.
+
+Private operational `/api` routes now require an authenticated session, while health and authentication endpoints remain public.
+
 ---
 
 ### 2. Database Failure Safety
@@ -199,6 +205,12 @@ The bot must not start automatic trading unless:
 * Settings can be loaded
 * Trade state can be restored
 * Executed signal IDs can be restored
+
+### Status
+
+Completed on July 12, 2026.
+
+Automatic trading now checks PostgreSQL readiness before it can be enabled or run. The readiness gate verifies the database connection, required execution tables, settings access, trade state access, and executed signal history access.
 
 ---
 
@@ -349,8 +361,8 @@ Every scan must report separate counts for:
 TradeHawk V2 should be developed sequentially.
 
 ```text
-V2-001 — Backend API Authentication
-V2-002 — Production Database Safety
+V2-001 — Backend API Authentication (Completed on July 12, 2026)
+V2-002 — Production Database Safety (Completed on July 12, 2026)
 V2-003 — Trading Rule Alignment
 V2-004 — Independent Trade Management Worker
 V2-005 — Position Sizing and Margin Validation

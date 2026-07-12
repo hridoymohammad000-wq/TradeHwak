@@ -88,8 +88,6 @@ class AutoTradeService:
         self._last_execution_status = "idle"
 
         try:
-            self._trade_service.sync_with_exchange(self._bybit_service)
-
             execution_ready, block_reason = self._settings_service.get_execution_readiness()
             if not execution_ready:
                 self._last_execution_status = (
@@ -101,11 +99,20 @@ class AutoTradeService:
                     "opened": 0,
                 }
 
+            persistence_ready, persistence_reason = self._execution_persistence_ready()
+            if not persistence_ready:
+                self._settings_service.update_control_state({"auto_trade_enabled": False})
+                self._last_execution_status = "blocked"
+                self._last_reject_reason = persistence_reason
+                return {"status": "database_not_ready", "opened": 0}
+
             bybit_status = self._bybit_service.get_connection_status().data
             if bybit_status.code != "CONNECTED":
                 self._last_execution_status = "blocked"
                 self._last_reject_reason = bybit_status.detail
                 return {"status": "exchange_disconnected", "opened": 0}
+
+            self._trade_service.sync_with_exchange(self._bybit_service)
 
             if self._trade_service.get_daily_trade_count() >= settings.daily_max_trades:
                 self._last_execution_status = "blocked"
@@ -303,6 +310,23 @@ class AutoTradeService:
         }
         combined_stop = state.daily_realized_pct <= self.COMBINED_REALIZED_LOSS_LIMIT_PCT
         return blocked_modes, combined_stop
+
+    def _execution_persistence_ready(self) -> tuple[bool, str | None]:
+        if self._repository is None:
+            return True, None
+
+        checker = getattr(self._repository, "verify_execution_ready", None)
+        if not callable(checker):
+            return True, None
+
+        ready, reason = checker()
+        if ready:
+            return True, None
+        return (
+            False,
+            "PostgreSQL persistence is required before auto trade can run: "
+            f"{reason}",
+        )
 
     def get_workflow_status(self) -> WorkflowStatusResponse:
         settings = self._settings_service.get_settings_state()

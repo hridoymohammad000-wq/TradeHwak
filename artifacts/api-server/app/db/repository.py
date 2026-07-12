@@ -17,7 +17,16 @@ except ImportError:
 
 
 class PersistenceRepository:
-    """Small synchronous Postgres repository with an in-memory-safe fallback."""
+    """Small synchronous Postgres repository."""
+
+    REQUIRED_EXECUTION_TABLES = (
+        "bot_settings",
+        "trade_history",
+        "executed_signal_ids",
+        "profit_tracking_state",
+        "workflow_state",
+        "execution_logs",
+    )
 
     def __init__(self, database_url: str | None) -> None:
         self.database_url = (database_url or "").strip()
@@ -39,6 +48,42 @@ class PersistenceRepository:
         except Exception as exc:
             self._handle_error("Database initialization failed", exc)
             return False
+
+    def verify_execution_ready(self) -> tuple[bool, str | None]:
+        if not self.database_url:
+            return False, "DATABASE_URL is not configured."
+        if psycopg is None:
+            return False, "psycopg is not installed; PostgreSQL persistence is unavailable."
+        if not self.enabled:
+            return False, self.last_error or "Database persistence is disabled."
+
+        try:
+            with self._connect() as connection:
+                missing_tables = []
+                for table in self.REQUIRED_EXECUTION_TABLES:
+                    row = connection.execute(
+                        "SELECT to_regclass(%s) AS table_name",
+                        (f"public.{table}",),
+                    ).fetchone()
+                    if not row or row.get("table_name") is None:
+                        missing_tables.append(table)
+                if missing_tables:
+                    return (
+                        False,
+                        "Required database tables are missing: "
+                        + ", ".join(missing_tables),
+                    )
+
+                connection.execute("SELECT settings FROM bot_settings WHERE id = 1").fetchone()
+                connection.execute("SELECT payload, status FROM trade_history LIMIT 1").fetchall()
+                connection.execute("SELECT signal_id FROM executed_signal_ids LIMIT 1").fetchall()
+                connection.execute("SELECT state FROM profit_tracking_state WHERE id = 1").fetchone()
+                connection.execute("SELECT state FROM workflow_state WHERE id = 1").fetchone()
+            self.last_error = None
+            return True, None
+        except Exception as exc:
+            self._handle_error("Database readiness check failed", exc)
+            return False, self.last_error
 
     def load_settings(self) -> dict[str, Any] | None:
         row = self._fetchone("SELECT settings FROM bot_settings WHERE id = 1")
