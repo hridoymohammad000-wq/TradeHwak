@@ -394,6 +394,19 @@ Every scan must report separate counts for:
 
 TradeHawk V2 should be developed sequentially.
 
+### V2 Status Checklist
+
+- [x] V2-001 - Backend API Authentication
+- [x] V2-002 - Production Database Safety
+- [x] V2-003 - Trading Rule Alignment
+- [x] V2-004 - Independent Trade Management Worker
+- [x] V2-005 - Position Sizing and Margin Validation
+- [x] V2-006 - Distributed Lock and Idempotency
+- [x] V2-007 - Exchange Reconciliation Rewrite
+- [x] V2-008 - Scanner Error Reporting
+- [x] V2-009 - Full Regression and Runtime Tests
+- [ ] V2-010 - Production Readiness Review
+
 ```text
 V2-001 — Backend API Authentication (Completed on July 12, 2026)
 V2-002 — Production Database Safety (Completed on July 12, 2026)
@@ -403,9 +416,15 @@ V2-005 — Position Sizing and Margin Validation (Completed on July 12, 2026)
 V2-006 — Distributed Lock and Idempotency (Completed on July 12, 2026)
 V2-007 — Exchange Reconciliation Rewrite (Completed on July 12, 2026)
 V2-008 — Scanner Error Reporting (Completed on July 12, 2026)
-V2-009 — Full Regression and Runtime Tests
+V2-009 — Full Regression and Runtime Tests (Completed on July 13, 2026)
 V2-010 — Production Readiness Review
 ```
+
+### V2-009 Verification Summary
+
+Completed on July 13, 2026.
+
+Verified with full backend regression (`146/146` tests passing), frontend validation (`npm run lint`), frontend production build (`npm run build`), and a live local backend runtime health check returning HTTP 200 from `/health`.
 
 Each task must be completed with:
 

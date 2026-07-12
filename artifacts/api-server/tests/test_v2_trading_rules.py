@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 
 from app.core.enums import Direction, Timeframe, TradingMode
+from app.core.trading_clock import trading_now
 from app.core.trading_rules import (
     COMBINED_DAILY_MAX_LOSS_PCT,
     COMBINED_MAX_OPEN_TRADES,
@@ -21,6 +22,7 @@ class ClosedTradeService:
     def __init__(self, realized_pnl=0.0, combined_remaining=999.0):
         self.realized_pnl = realized_pnl
         self.combined_remaining = combined_remaining
+        self.closed_time = trading_now().isoformat()
 
     def get_remaining_daily_loss_budget(self, configured_daily_max_loss):
         return min(float(configured_daily_max_loss), self.combined_remaining)
@@ -36,7 +38,7 @@ class ClosedTradeService:
                         "direction": Direction.BUY,
                         "status": "closed",
                         "realized_pnl": self.realized_pnl,
-                        "closed_time": "2026-07-12T00:00:00+00:00",
+                        "closed_time": self.closed_time,
                     }
                 ]
             ),
