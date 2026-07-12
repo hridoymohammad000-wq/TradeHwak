@@ -47,8 +47,6 @@ class ManualTradeService:
             raise HTTPException(status_code=400, detail="Manual execution is locked to demo mode.")
         if settings_state.emergency_stop:
             raise HTTPException(status_code=400, detail="Release emergency stop before sending orders.")
-        if settings_state.risk_per_trade_pct <= 0:
-            raise HTTPException(status_code=400, detail="Set risk per trade above 0%.")
 
         connection = self._bybit_service.get_connection_status().data
         if connection.code != "CONNECTED":

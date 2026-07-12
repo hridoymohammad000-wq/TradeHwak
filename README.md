@@ -498,7 +498,7 @@ TradeHawk V2 will be considered complete only when:
   Bid-ask spread বেশি হলে symbol skip করতে হবে; minimum liquidity/slippage rule যোগ করতে হবে।
 - [x] `V2-024 - Fresh Price for Trade Management`
   15-second trade manager-কে stale reconciliation price নয়, fresh ticker/position price ব্যবহার করতে হবে।
-- [ ] `V2-025 - Single Risk Authority`
+- [x] `V2-025 - Single Risk Authority`
   Fixed V2 scalping/intraday rules এবং editable Control Center risk fields-এর conflict সরাতে হবে।
 
 ### Double Down Challenge

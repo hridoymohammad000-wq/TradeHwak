@@ -138,19 +138,6 @@ class AutoTradeService:
                 )
                 return {"status": "daily_trade_stop", "opened": 0}
 
-            if (
-                self._trade_service.get_remaining_daily_loss_budget(
-                    settings.daily_max_loss
-                )
-                <= 0
-            ):
-                self._settings_service.update_control_state(
-                    {"auto_trade_enabled": False}
-                )
-                self._last_execution_status = "blocked"
-                self._last_reject_reason = "Daily max loss limit reached."
-                return {"status": "daily_loss_stop", "opened": 0}
-
             blocked_modes, combined_stop = self._realized_loss_blocks()
             if combined_stop:
                 self._settings_service.update_control_state({"auto_trade_enabled": False})

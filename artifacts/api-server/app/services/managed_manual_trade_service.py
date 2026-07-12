@@ -55,7 +55,7 @@ class ManagedManualTradeService(ManualTradeService):
                 ),
             )
 
-        overall_limit = min(settings.max_open_positions, COMBINED_MAX_OPEN_TRADES)
+        overall_limit = COMBINED_MAX_OPEN_TRADES
         if len(active.scalping_trades) + len(active.intraday_trades) >= overall_limit:
             raise HTTPException(
                 status_code=409,

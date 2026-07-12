@@ -62,19 +62,34 @@ class StepOneFoundationTests(unittest.TestCase):
         self.assertEqual(context.exception.detail, "Scalping engine is disabled.")
 
     def test_auto_trade_requires_positive_canonical_risk_limits(self):
-        cases = (
-            ("daily_max_loss", "Set daily max loss above 0 USDT"),
-            ("daily_max_trades", "Set daily max trades above 0"),
-            ("max_open_positions", "Set max open positions above 0"),
+        service = SettingsService(repository=FakeRepository())
+
+        with self.assertRaises(HTTPException) as context:
+            service.update_settings(
+                self._valid_settings_update(daily_max_trades=0)
+            )
+
+        self.assertIn("Set daily max trades above 0", context.exception.detail)
+
+    def test_canonical_risk_fields_override_user_edits(self):
+        service = SettingsService(repository=FakeRepository())
+
+        updated = service.update_settings(
+            self._valid_settings_update(
+                active_strategy_mode=TradingMode.INTRADAY,
+                scalping_engine_enabled=False,
+                intraday_engine_enabled=True,
+                risk_per_trade_pct=99.0,
+                daily_max_loss=999.0,
+                max_open_positions=99,
+                daily_max_trades=7,
+            )
         )
-        for field, expected in cases:
-            with self.subTest(field=field):
-                service = SettingsService(repository=FakeRepository())
-                with self.assertRaises(HTTPException) as context:
-                    service.update_settings(
-                        self._valid_settings_update(**{field: 0})
-                    )
-                self.assertIn(expected, context.exception.detail)
+
+        self.assertEqual(updated.data.risk.daily_max_trades, 7)
+        self.assertEqual(updated.data.risk.daily_max_loss, 5.0)
+        self.assertEqual(updated.data.risk.max_open_positions, 5)
+        self.assertEqual(updated.data.risk.risk_per_trade_pct, 1.0)
 
     def test_health_execution_flag_uses_persisted_settings_readiness(self):
         service = SettingsService(repository=FakeRepository())

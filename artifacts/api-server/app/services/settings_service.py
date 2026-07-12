@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 
 from app.core.config import get_app_config
 from app.core.enums import RuntimeMode, TradingMode
+from app.core.trading_rules import COMBINED_DAILY_MAX_LOSS_PCT, COMBINED_MAX_OPEN_TRADES, trading_rule
 from app.db.repository import PersistenceRepository
 from app.models.settings import TradingSettingsModel
 from app.schemas.mode import ModeData, ModeResponse
@@ -59,7 +60,9 @@ class SettingsService:
             self._repository.save_settings(self._settings.model_dump(mode="json"))
 
     def get_settings_state(self) -> SettingsStateData:
-        return SettingsStateData.model_validate(self._settings.model_dump())
+        payload = self._settings.model_dump()
+        payload.update(self._canonical_risk_fields(self._settings.active_strategy_mode))
+        return SettingsStateData.model_validate(payload)
 
     def get_settings_view_data(self) -> SettingsViewData:
         state = self.get_settings_state()
@@ -115,6 +118,9 @@ class SettingsService:
     def update_settings(self, payload: SettingsUpdate) -> SettingsResponse:
         updated_data = self._settings.model_dump()
         patch = payload.model_dump(exclude_unset=True, exclude_none=True)
+        patch.pop("risk_per_trade_pct", None)
+        patch.pop("daily_max_loss", None)
+        patch.pop("max_open_positions", None)
         notifications_patch = patch.pop("notifications", None)
 
         updated_data.update(patch)
@@ -200,12 +206,15 @@ class SettingsService:
                 return "Intraday engine is disabled."
         else:
             return "Selected strategy mode is unsupported."
-        if settings.risk_per_trade_pct <= 0:
-            return "Set risk per trade above 0% before enabling auto trade."
-        if settings.daily_max_loss <= 0:
-            return "Set daily max loss above 0 USDT before enabling auto trade."
         if settings.daily_max_trades <= 0:
             return "Set daily max trades above 0 before enabling auto trade."
-        if settings.max_open_positions <= 0:
-            return "Set max open positions above 0 before enabling auto trade."
         return None
+
+    @staticmethod
+    def _canonical_risk_fields(mode: TradingMode) -> dict[str, float | int]:
+        rule = trading_rule(mode)
+        return {
+            "daily_max_loss": float(COMBINED_DAILY_MAX_LOSS_PCT),
+            "risk_per_trade_pct": float(rule.risk_per_trade_pct),
+            "max_open_positions": COMBINED_MAX_OPEN_TRADES,
+        }

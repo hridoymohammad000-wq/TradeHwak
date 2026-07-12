@@ -131,6 +131,19 @@ export default function ControlCenter() {
     </label>
   );
 
+  const lockedField = (label: string, key: keyof typeof risk) => (
+    <label className="block">
+      <span className="text-[10px] uppercase font-mono text-slate-400">{label}</span>
+      <input
+        type="number"
+        value={risk[key]}
+        disabled
+        readOnly
+        className="mt-1 w-full cursor-not-allowed bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs text-slate-400"
+      />
+    </label>
+  );
+
   const selectedEngineEnabled = settings
     ? mode === 'scalping'
       ? settings.engine_control.scalping_engine_enabled
@@ -180,10 +193,10 @@ export default function ControlCenter() {
             <div className="bg-slate-900 border border-slate-850 rounded-xl p-5">
               <h3 className="text-base font-bold text-white mb-4">Canonical Risk Limits</h3>
               <div className="grid grid-cols-2 gap-4">
-                {field('Risk per trade %', 'risk_per_trade_pct')}
+                {lockedField('Risk per trade % (Locked by mode)', 'risk_per_trade_pct')}
                 {field('Daily max trades', 'daily_max_trades', '1')}
-                {field('Daily max loss (USDT)', 'daily_max_loss')}
-                {field('Max open positions', 'max_open_positions', '1')}
+                {lockedField('Combined daily max loss % (Locked)', 'daily_max_loss')}
+                {lockedField('Max open positions (Locked)', 'max_open_positions')}
               </div>
               <label className="block mt-4">
                 <span className="text-[10px] uppercase font-mono text-slate-400">Active strategy mode</span>
