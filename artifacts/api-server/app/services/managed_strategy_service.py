@@ -1,5 +1,5 @@
 from app.core.enums import Direction, Timeframe, TradingMode
-from app.services.strategy_service import Candle, StrategyService, StrategySignal
+from app.services.strategy_service import Candle, StrategyEvaluation, StrategyService, StrategySignal
 
 
 class ManagedStrategyService(StrategyService):
@@ -30,14 +30,23 @@ class ManagedStrategyService(StrategyService):
         mode: TradingMode,
         timeframe: Timeframe | None,
     ) -> StrategySignal | None:
+        return self.evaluate_symbol_detailed(symbol, mode, timeframe).signal
+
+    def evaluate_symbol_detailed(
+        self,
+        symbol: str,
+        mode: TradingMode,
+        timeframe: Timeframe | None,
+    ) -> StrategyEvaluation:
         setup_timeframe = self.default_timeframe(mode)
-        signal = super().evaluate_symbol(
+        evaluation = super().evaluate_symbol_detailed(
             symbol=symbol,
             mode=mode,
             timeframe=setup_timeframe,
         )
+        signal = evaluation.signal
         if signal is None:
-            return None
+            return evaluation
 
         setup_candles = self._load_candles(
             symbol,
@@ -45,12 +54,20 @@ class ManagedStrategyService(StrategyService):
             240,
         )
         if len(setup_candles) < 60:
-            return None
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="insufficient_data",
+                detail="Confirmation setup candles were incomplete.",
+            )
 
         matches = self._strategy_matches(setup_candles, signal.direction)
         matched_names = [name for name, matched in matches.items() if matched]
         if not matched_names:
-            return None
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="rejected",
+                detail="No managed strategy pattern matched the setup candle structure.",
+            )
 
         confirmation_timeframe = self._CONFIRMATION_TIMEFRAME[mode]
         confirmation = self._confirmation_context(
@@ -59,7 +76,11 @@ class ManagedStrategyService(StrategyService):
             direction=signal.direction,
         )
         if confirmation is None:
-            return None
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="rejected",
+                detail="Closed-candle confirmation did not validate the setup.",
+            )
 
         signal.metrics.update(
             {
@@ -90,7 +111,7 @@ class ManagedStrategyService(StrategyService):
             f"{confirmation['candle_label']}, RSI {float(confirmation['rsi']):.1f}, "
             f"VWAP {float(confirmation['vwap']):.8f}."
         )
-        return signal
+        return StrategyEvaluation(symbol=symbol, outcome="actionable", signal=signal)
 
     def _strategy_matches(
         self,

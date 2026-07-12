@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from fastapi import HTTPException
+
 from app.core.enums import Direction, SignalGrade, Timeframe, TradingMode
 from app.core.trading_rules import trading_rule
 from app.services.bybit_service import BybitService
@@ -26,6 +28,14 @@ class Candle:
     low: float
     close: float
     volume: float
+
+
+@dataclass
+class StrategyEvaluation:
+    symbol: str
+    outcome: str
+    signal: StrategySignal | None = None
+    detail: str | None = None
 
 
 class StrategyService:
@@ -56,84 +66,140 @@ class StrategyService:
     def default_timeframe(self, mode: TradingMode) -> Timeframe:
         return self._DEFAULT_TIMEFRAME[mode]
 
-    def evaluate_symbol(self, symbol: str, mode: TradingMode, timeframe: Timeframe | None) -> StrategySignal | None:
+    def evaluate_symbol(
+        self,
+        symbol: str,
+        mode: TradingMode,
+        timeframe: Timeframe | None,
+    ) -> StrategySignal | None:
+        return self.evaluate_symbol_detailed(symbol, mode, timeframe).signal
+
+    def evaluate_symbol_detailed(
+        self,
+        symbol: str,
+        mode: TradingMode,
+        timeframe: Timeframe | None,
+    ) -> StrategyEvaluation:
         selected_timeframe = timeframe or self.default_timeframe(mode)
-        candles = self._load_candles(symbol, self._INTERVAL_MAP[selected_timeframe], 240)
-        minimum = 210 if mode == TradingMode.INTRADAY else 80
-        if len(candles) < minimum:
-            return None
+        try:
+            candles = self._load_candles(symbol, self._INTERVAL_MAP[selected_timeframe], 240)
+            minimum = 210 if mode == TradingMode.INTRADAY else 80
+            if len(candles) < minimum:
+                return StrategyEvaluation(
+                    symbol=symbol,
+                    outcome="insufficient_data",
+                    detail=f"Only {len(candles)} candles available; need at least {minimum}.",
+                )
 
-        closes = [item.close for item in candles]
-        current_price = candles[-1].close
-        ema20 = self._ema(closes, 20)
-        ema50 = self._ema(closes, 50)
-        ema200 = self._ema(closes, 200)
-        rsi = self._rsi(closes, 14)
-        atr = self._atr(candles, 14)
-        if None in (ema20, ema50, rsi, atr) or current_price <= 0:
-            return None
+            closes = [item.close for item in candles]
+            current_price = candles[-1].close
+            ema20 = self._ema(closes, 20)
+            ema50 = self._ema(closes, 50)
+            ema200 = self._ema(closes, 200)
+            rsi = self._rsi(closes, 14)
+            atr = self._atr(candles, 14)
+            if None in (ema20, ema50, rsi, atr) or current_price <= 0:
+                return StrategyEvaluation(
+                    symbol=symbol,
+                    outcome="insufficient_data",
+                    detail="Indicator inputs were incomplete for signal evaluation.",
+                )
 
-        direction = self._base_direction(current_price, ema20, ema50, rsi)
-        if direction is None:
-            return None
-        if mode == TradingMode.INTRADAY and not self._ema200_aligned(direction, current_price, ema200):
-            return None
+            direction = self._base_direction(current_price, ema20, ema50, rsi)
+            if direction is None:
+                return StrategyEvaluation(
+                    symbol=symbol,
+                    outcome="rejected",
+                    detail="Base trend and momentum conditions were not aligned.",
+                )
+            if mode == TradingMode.INTRADAY and not self._ema200_aligned(direction, current_price, ema200):
+                return StrategyEvaluation(
+                    symbol=symbol,
+                    outcome="rejected",
+                    detail="Higher-trend EMA200 alignment did not confirm the setup.",
+                )
 
-        trend_gap_pct = abs(ema20 - ema50) / current_price * 100
-        atr_pct = atr / current_price * 100
-        extension_pct = abs(current_price - ema20) / current_price * 100
-        max_extension = max(atr_pct * (1.8 if mode == TradingMode.SCALPING else 2.4), 0.65 if mode == TradingMode.SCALPING else 1.35)
-        if extension_pct > max_extension:
-            return None
+            trend_gap_pct = abs(ema20 - ema50) / current_price * 100
+            atr_pct = atr / current_price * 100
+            extension_pct = abs(current_price - ema20) / current_price * 100
+            max_extension = max(atr_pct * (1.8 if mode == TradingMode.SCALPING else 2.4), 0.65 if mode == TradingMode.SCALPING else 1.35)
+            if extension_pct > max_extension:
+                return StrategyEvaluation(
+                    symbol=symbol,
+                    outcome="rejected",
+                    detail="Price was too extended from the setup EMA.",
+                )
 
-        higher_score = self._higher_timeframe_score(symbol, mode, direction)
-        if mode == TradingMode.INTRADAY and higher_score < 0:
-            return None
-        candle_score = self._candle_confirmation_score(candles, direction)
-        volume_score = self._volume_confirmation_score(candles)
-        mode_score = self._mode_specific_score(mode, direction, trend_gap_pct, rsi, atr_pct, volume_score)
-        extension_penalty = self._extension_penalty(extension_pct, atr_pct)
-        final_score = max(0.0, min(100.0, mode_score + higher_score + candle_score + volume_score - extension_penalty))
-        grade = self._grade_from_score(final_score)
-        if grade not in {SignalGrade.A_PLUS, SignalGrade.A}:
-            return None
+            higher_score = self._higher_timeframe_score(symbol, mode, direction)
+            if mode == TradingMode.INTRADAY and higher_score < 0:
+                return StrategyEvaluation(
+                    symbol=symbol,
+                    outcome="rejected",
+                    detail="Higher-timeframe structure opposed the setup direction.",
+                )
+            candle_score = self._candle_confirmation_score(candles, direction)
+            volume_score = self._volume_confirmation_score(candles)
+            mode_score = self._mode_specific_score(mode, direction, trend_gap_pct, rsi, atr_pct, volume_score)
+            extension_penalty = self._extension_penalty(extension_pct, atr_pct)
+            final_score = max(0.0, min(100.0, mode_score + higher_score + candle_score + volume_score - extension_penalty))
+            grade = self._grade_from_score(final_score)
+            if grade not in {SignalGrade.A_PLUS, SignalGrade.A}:
+                return StrategyEvaluation(
+                    symbol=symbol,
+                    outcome="rejected",
+                    detail=f"Signal grade {grade.value} was below the actionable threshold.",
+                )
 
-        recent = candles[-12:]
-        swing_low = min(item.low for item in recent)
-        swing_high = max(item.high for item in recent)
-        reason = (
-            f"{grade.value} {mode.value} {direction.value} setup on {selected_timeframe.value}: "
-            f"score {final_score:.1f}, EMA gap {trend_gap_pct:.2f}%, RSI {rsi:.1f}, "
-            f"HTF {higher_score:+.0f}, candle {candle_score:+.0f}, volume {volume_score:+.0f}."
-        )
-        return StrategySignal(
-            symbol=symbol,
-            mode=mode,
-            timeframe=selected_timeframe,
-            direction=direction,
-            grade=grade,
-            status="armed" if grade == SignalGrade.A_PLUS else "watching",
-            entry_price=round(current_price, 8),
-            current_price=round(current_price, 8),
-            reason=reason,
-            metrics={
-                "current_price": round(current_price, 8),
-                "ema20": round(ema20, 8),
-                "ema50": round(ema50, 8),
-                "ema200": round(ema200 or 0.0, 8),
-                "rsi14": round(rsi, 2),
-                "atr14": round(atr, 8),
-                "atr_pct": round(atr_pct, 4),
-                "swing_low": round(swing_low, 8),
-                "swing_high": round(swing_high, 8),
-                "trend_gap_pct": round(trend_gap_pct, 4),
-                "higher_timeframe_score": round(higher_score, 2),
-                "candle_score": round(candle_score, 2),
-                "volume_score": round(volume_score, 2),
-                "extension_penalty": round(extension_penalty, 2),
-                "final_score": round(final_score, 2),
-            },
-        )
+            recent = candles[-12:]
+            swing_low = min(item.low for item in recent)
+            swing_high = max(item.high for item in recent)
+            reason = (
+                f"{grade.value} {mode.value} {direction.value} setup on {selected_timeframe.value}: "
+                f"score {final_score:.1f}, EMA gap {trend_gap_pct:.2f}%, RSI {rsi:.1f}, "
+                f"HTF {higher_score:+.0f}, candle {candle_score:+.0f}, volume {volume_score:+.0f}."
+            )
+            signal = StrategySignal(
+                symbol=symbol,
+                mode=mode,
+                timeframe=selected_timeframe,
+                direction=direction,
+                grade=grade,
+                status="armed" if grade == SignalGrade.A_PLUS else "watching",
+                entry_price=round(current_price, 8),
+                current_price=round(current_price, 8),
+                reason=reason,
+                metrics={
+                    "current_price": round(current_price, 8),
+                    "ema20": round(ema20, 8),
+                    "ema50": round(ema50, 8),
+                    "ema200": round(ema200 or 0.0, 8),
+                    "rsi14": round(rsi, 2),
+                    "atr14": round(atr, 8),
+                    "atr_pct": round(atr_pct, 4),
+                    "swing_low": round(swing_low, 8),
+                    "swing_high": round(swing_high, 8),
+                    "trend_gap_pct": round(trend_gap_pct, 4),
+                    "higher_timeframe_score": round(higher_score, 2),
+                    "candle_score": round(candle_score, 2),
+                    "volume_score": round(volume_score, 2),
+                    "extension_penalty": round(extension_penalty, 2),
+                    "final_score": round(final_score, 2),
+                },
+            )
+            return StrategyEvaluation(symbol=symbol, outcome="actionable", signal=signal)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else "Exchange request failed"
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="exchange_error",
+                detail=detail,
+            )
+        except Exception as exc:
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="failed",
+                detail=str(exc),
+            )
 
     def _load_candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         payload = self._bybit_service._get_closed_klines(symbol, interval, limit=limit)
@@ -194,6 +260,8 @@ class StrategyService:
                 return 12.0 if mode == TradingMode.INTRADAY else 10.0
             if opposed:
                 return -10.0 if mode == TradingMode.INTRADAY else -6.0
+        except HTTPException:
+            raise
         except Exception:
             return 0.0
         return 0.0

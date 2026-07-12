@@ -358,7 +358,11 @@ Authoritative exchange reconciliation now lives directly inside the canonical `T
 
 ### 8. Scanner Error Visibility
 
-Some market-data and strategy errors are silently skipped.
+Completed on July 12, 2026.
+
+Scanner responses now expose a structured breakdown for scanned, actionable, rejected, skipped, failed, exchange-error, and insufficient-data outcomes. Non-actionable symbols are also returned with per-symbol issue details so market-data failures are no longer indistinguishable from ordinary strategy rejection.
+
+Some market-data and strategy errors were previously silently skipped.
 
 This can make these two situations look identical:
 
@@ -398,7 +402,7 @@ V2-004 — Independent Trade Management Worker (Completed on July 12, 2026)
 V2-005 — Position Sizing and Margin Validation (Completed on July 12, 2026)
 V2-006 — Distributed Lock and Idempotency (Completed on July 12, 2026)
 V2-007 — Exchange Reconciliation Rewrite (Completed on July 12, 2026)
-V2-008 — Scanner Error Reporting
+V2-008 — Scanner Error Reporting (Completed on July 12, 2026)
 V2-009 — Full Regression and Runtime Tests
 V2-010 — Production Readiness Review
 ```

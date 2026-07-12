@@ -32,9 +32,27 @@ class ScanResult(BaseModel):
     reason: str | None = None
 
 
+class ScanBreakdown(BaseModel):
+    scanned: int
+    actionable: int
+    rejected: int
+    skipped: int
+    failed: int
+    exchange_error: int
+    insufficient_data: int
+
+
+class ScanIssue(BaseModel):
+    symbol: str
+    status: str
+    detail: str | None = None
+
+
 class ScanData(BaseModel):
     mode: TradingMode
     timeframe: Timeframe | None = None
+    breakdown: ScanBreakdown
+    issues: list[ScanIssue]
     results: list[ScanResult]
 
 

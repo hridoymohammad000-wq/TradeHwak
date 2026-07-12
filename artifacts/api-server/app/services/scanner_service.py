@@ -1,11 +1,20 @@
 from threading import Lock
 
+from collections import Counter
+from dataclasses import dataclass
+
 from fastapi import HTTPException, status
 
-from app.schemas.scanner import ScanData, ScanRequest, ScanResponse, ScanResult
+from app.schemas.scanner import ScanBreakdown, ScanData, ScanIssue, ScanRequest, ScanResponse, ScanResult
 from app.services.settings_service import SettingsService
 from app.services.signal_registry import SignalRegistry
 from app.services.strategy_service import StrategyService, StrategySignal
+
+
+@dataclass
+class ScanBatch:
+    symbols: list[str]
+    skipped: list[ScanIssue]
 
 
 class ScannerService:
@@ -29,6 +38,25 @@ class ScannerService:
         except (AttributeError, TypeError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _prepare_symbols(symbols: list[str]) -> ScanBatch:
+        unique_symbols: list[str] = []
+        skipped: list[ScanIssue] = []
+        seen: set[str] = set()
+        for symbol in symbols:
+            if symbol in seen:
+                skipped.append(
+                    ScanIssue(
+                        symbol=symbol,
+                        status="skipped",
+                        detail="Duplicate symbol was skipped after its first occurrence.",
+                    )
+                )
+                continue
+            seen.add(symbol)
+            unique_symbols.append(symbol)
+        return ScanBatch(symbols=unique_symbols, skipped=skipped)
+
     def scan(self, payload: ScanRequest | None) -> ScanResponse:
         if not self._scan_lock.acquire(blocking=False):
             raise HTTPException(
@@ -42,20 +70,32 @@ class ScannerService:
                 request.mode
                 or self._settings_service.get_mode_summary().data.active_strategy_mode
             )
-            symbols = request.symbols or self._strategy_service.default_symbols(selected_mode)
+            requested_symbols = request.symbols or self._strategy_service.default_symbols(selected_mode)
+            batch = self._prepare_symbols(requested_symbols)
+            symbols = batch.symbols
             evaluated_signals: list[StrategySignal] = []
+            issues = list(batch.skipped)
+            counts = Counter()
+            counts["scanned"] = len(symbols)
+            counts["skipped"] = len(batch.skipped)
 
             for symbol in symbols:
-                try:
-                    signal = self._strategy_service.evaluate_symbol(
-                        symbol=symbol,
-                        mode=selected_mode,
-                        timeframe=request.timeframe,
+                evaluation = self._strategy_service.evaluate_symbol_detailed(
+                    symbol=symbol,
+                    mode=selected_mode,
+                    timeframe=request.timeframe,
+                )
+                counts[evaluation.outcome] += 1
+                if evaluation.signal is not None:
+                    evaluated_signals.append(evaluation.signal)
+                else:
+                    issues.append(
+                        ScanIssue(
+                            symbol=symbol,
+                            status=evaluation.outcome,
+                            detail=evaluation.detail,
+                        )
                     )
-                except HTTPException:
-                    continue
-                if signal is not None:
-                    evaluated_signals.append(signal)
 
             ranked = sorted(
                 evaluated_signals,
@@ -80,6 +120,16 @@ class ScannerService:
                     mode=selected_mode,
                     timeframe=request.timeframe
                     or self._strategy_service.default_timeframe(selected_mode),
+                    breakdown=ScanBreakdown(
+                        scanned=counts["scanned"],
+                        actionable=counts["actionable"],
+                        rejected=counts["rejected"],
+                        skipped=counts["skipped"],
+                        failed=counts["failed"],
+                        exchange_error=counts["exchange_error"],
+                        insufficient_data=counts["insufficient_data"],
+                    ),
+                    issues=issues,
                     results=[
                         ScanResult(
                             symbol=signal.symbol,
