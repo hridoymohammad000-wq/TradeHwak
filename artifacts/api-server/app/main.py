@@ -137,6 +137,7 @@ def _initialize_runtime_state() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _initialize_runtime_state()
+    bybit_service.start_websockets()
     tasks = [
         asyncio.create_task(_auto_trade_loop()),
         asyncio.create_task(_trade_management_loop()),
@@ -145,6 +146,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        bybit_service.stop_websockets()
         for task in tasks:
             task.cancel()
         for task in tasks:

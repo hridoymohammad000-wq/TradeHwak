@@ -20,6 +20,7 @@ from app.schemas.bybit import (
     BybitMarketTestData,
     BybitMarketTestResponse,
 )
+from app.services.bybit_websocket import BybitWebSocketManager
 
 
 class BybitService:
@@ -29,6 +30,7 @@ class BybitService:
 
     def __init__(self) -> None:
         self._symbol_validation_cache: dict[str, tuple[dict, float]] = {}
+        self._websocket_manager = BybitWebSocketManager(self)
 
     def get_config_status(self) -> BybitConfigStatusResponse:
         api_key = (os.environ.get("BYBIT_DEMO_API_KEY") or "").strip()
@@ -106,16 +108,23 @@ class BybitService:
 
     def get_market_snapshot(self, symbol: str | None) -> BybitMarketSnapshotResponse:
         target = symbol or "BTCUSDT"
-        ticker = self._get_ticker(target)
-        orderbook = self._get_orderbook(target)
-
-        ticker_item = ticker.get("result", {}).get("list", [{}])[0]
-        book = orderbook.get("result", {}) or {}
-        bids = book.get("b") or []
-        asks = book.get("a") or []
-
-        best_bid = float(bids[0][0]) if bids else None
-        best_ask = float(asks[0][0]) if asks else None
+        self._websocket_manager.ensure_public_symbol(target)
+        cached = self._websocket_manager.get_market_snapshot(target)
+        if cached is None:
+            ticker = self._get_ticker(target)
+            orderbook = self._get_orderbook(target)
+            ticker_item = ticker.get("result", {}).get("list", [{}])[0]
+            book = orderbook.get("result", {}) or {}
+            bids = book.get("b") or []
+            asks = book.get("a") or []
+            best_bid = float(bids[0][0]) if bids else None
+            best_ask = float(asks[0][0]) if asks else None
+            fetched_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        else:
+            ticker_item = cached
+            best_bid = self._to_float(cached.get("bid1Price"))
+            best_ask = self._to_float(cached.get("ask1Price"))
+            fetched_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cached.get("fetchedAt") or time.time()))
         spread = (best_ask - best_bid) if best_bid is not None and best_ask is not None else None
         spread_percent = (
             round((spread / best_bid) * 100, 4)
@@ -137,7 +146,7 @@ class BybitService:
                 best_ask_price=best_ask,
                 spread=spread,
                 spread_percent=spread_percent,
-                fetched_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                fetched_at=fetched_at,
             ),
         )
 
@@ -203,6 +212,9 @@ class BybitService:
         return self._private_post("/v5/order/create", payload)
 
     def get_open_positions(self) -> list[dict]:
+        cached = self._websocket_manager.get_open_positions()
+        if cached:
+            return cached
         data = self._private_get(
             "/v5/position/list",
             parse.urlencode({"category": "linear", "settleCoin": "USDT"}),
@@ -211,6 +223,11 @@ class BybitService:
 
     def get_position(self, symbol: str) -> dict | None:
         target = str(symbol or "").upper()
+        cached = self._websocket_manager.get_position(target)
+        if cached is not None:
+            size = self._to_float(cached.get("size")) or 0.0
+            if size > 0:
+                return cached
         for position in self.get_open_positions():
             if str(position.get("symbol") or "").upper() != target:
                 continue
@@ -228,6 +245,14 @@ class BybitService:
         order_link_id: str | None = None,
         limit: int = 10,
     ) -> list[dict]:
+        cached = self._websocket_manager.get_order_history(
+            symbol=symbol,
+            order_id=order_id,
+            order_link_id=order_link_id,
+            limit=limit,
+        )
+        if cached:
+            return cached
         query = {
             "category": "linear",
             "symbol": str(symbol or "").upper(),
@@ -269,6 +294,23 @@ class BybitService:
             parse.urlencode({"category": "linear", "limit": str(limit)}),
         )
         return data.get("result", {}).get("list", []) or []
+
+    def start_websockets(self) -> None:
+        self._websocket_manager.start()
+
+    def stop_websockets(self) -> None:
+        self._websocket_manager.stop()
+
+    def uses_testnet_streams(self) -> bool:
+        return "api-demo.bybit.com" in self._base_url() or "testnet" in self._base_url()
+
+    def has_private_credentials(self) -> bool:
+        api_key = (os.environ.get("BYBIT_DEMO_API_KEY") or "").strip()
+        api_secret = (os.environ.get("BYBIT_DEMO_API_SECRET") or "").strip()
+        return bool(api_key and api_secret)
+
+    def private_credentials(self) -> tuple[str, str]:
+        return self._credentials()
 
     def _base_url(self) -> str:
         return (os.environ.get("BYBIT_BASE_URL") or self.REQUIRED_BASE_URL).strip()
