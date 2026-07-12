@@ -158,10 +158,35 @@ class TradeManagementService:
         requested_qty: Decimal,
         expected_remaining_qty: Decimal,
     ) -> None:
-        order_id = self._submit_partial_close(trade, requested_qty, stage, key)
+        order_link_id = self._order_link_id(key, stage)
+        try:
+            submission = self._submit_partial_close(
+                trade,
+                requested_qty,
+                stage,
+                key,
+                order_link_id=order_link_id,
+            )
+        except TypeError:
+            submission = self._submit_partial_close(
+                trade,
+                requested_qty,
+                stage,
+                key,
+            )
+        if isinstance(submission, tuple):
+            order_id, submitted_qty = submission
+        else:
+            order_id = submission
+            submitted_qty = min(requested_qty, Decimal(str(trade.qty)))
         state["pending_stage"] = stage
         state["pending_order_id"] = order_id
+        state["pending_order_link_id"] = order_link_id
         state["pending_expected_qty"] = str(expected_remaining_qty)
+        state["pending_submitted_qty"] = str(submitted_qty)
+        state["pending_filled_baseline_qty"] = str(
+            self._filled_qty_from_state(state, trade)
+        )
 
     def _resolve_pending_partial_exit(
         self,
@@ -175,7 +200,30 @@ class TradeManagementService:
         if stage not in {"tp1", "tp2"}:
             return None
         expected_remaining = Decimal(str(state.get("pending_expected_qty") or "0"))
+        submitted_qty = Decimal(str(state.get("pending_submitted_qty") or "0"))
         current_qty = Decimal(str(trade.qty))
+        order_status = self._pending_order_status(
+            trade.symbol,
+            state.get("pending_order_id"),
+            state.get("pending_order_link_id"),
+        )
+        if order_status in {"Cancelled", "Rejected", "Deactivated"}:
+            state.pop("pending_stage", None)
+            state.pop("pending_order_id", None)
+            state.pop("pending_order_link_id", None)
+            state.pop("pending_expected_qty", None)
+            state.pop("pending_submitted_qty", None)
+            state.pop("pending_filled_baseline_qty", None)
+            return "skipped"
+        if order_status not in {"Filled", "PartiallyFilled"}:
+            return "pending"
+        filled_baseline = Decimal(str(state.get("pending_filled_baseline_qty") or "0"))
+        filled_delta = max(
+            Decimal("0"),
+            self._filled_qty_from_state(state, trade) - filled_baseline,
+        )
+        if filled_delta < submitted_qty:
+            return "pending"
         if current_qty > expected_remaining:
             return "pending"
         if stage == "tp1":
@@ -193,7 +241,10 @@ class TradeManagementService:
             state["last_stop"] = float(tp1_price)
         state.pop("pending_stage", None)
         state.pop("pending_order_id", None)
+        state.pop("pending_order_link_id", None)
         state.pop("pending_expected_qty", None)
+        state.pop("pending_submitted_qty", None)
+        state.pop("pending_filled_baseline_qty", None)
         return stage
 
     @staticmethod
@@ -234,7 +285,15 @@ class TradeManagementService:
             return mode
         return TradingMode(str(mode))
 
-    def _submit_partial_close(self, trade, requested_qty: Decimal, stage: str, key: str) -> str:
+    def _submit_partial_close(
+        self,
+        trade,
+        requested_qty: Decimal,
+        stage: str,
+        key: str,
+        *,
+        order_link_id: str | None = None,
+    ) -> tuple[str, Decimal]:
         instrument = self._bybit_service.get_validated_symbol(trade.symbol)["instrument"]
         lot = instrument.get("lotSizeFilter", {})
         step = Decimal(str(lot.get("qtyStep") or "0"))
@@ -255,7 +314,7 @@ class TradeManagementService:
             "positionIdx": 0,
             "reduceOnly": True,
             "closeOnTrigger": False,
-            "orderLinkId": self._order_link_id(key, stage),
+            "orderLinkId": order_link_id or self._order_link_id(key, stage),
         }
         order = self._submit_order_with_retry(payload)
         order_id = order.get("result", {}).get("orderId")
@@ -270,7 +329,7 @@ class TradeManagementService:
                 "order_id": order_id,
             },
         )
-        return str(order_id)
+        return str(order_id), qty
 
     def _tighten_stop(self, trade, proposed: Decimal) -> None:
         instrument = self._bybit_service.get_validated_symbol(trade.symbol)["instrument"]
@@ -323,6 +382,36 @@ class TradeManagementService:
                 if attempt == 0:
                     time.sleep(0.25)
         raise last_error or HTTPException(status_code=502, detail="Stop update failed.")
+
+    def _pending_order_status(
+        self,
+        symbol: str,
+        order_id: str | None,
+        order_link_id: str | None,
+    ) -> str | None:
+        try:
+            rows = self._bybit_service.get_order_history(
+                symbol=symbol,
+                order_id=order_id,
+                order_link_id=order_link_id,
+                limit=5,
+            )
+        except HTTPException:
+            return None
+        for row in rows:
+            row_order_id = str(row.get("orderId") or "").strip()
+            row_link_id = str(row.get("orderLinkId") or "").strip()
+            if order_id and row_order_id == str(order_id):
+                return str(row.get("orderStatus") or "").strip() or None
+            if order_link_id and row_link_id == str(order_link_id):
+                return str(row.get("orderStatus") or "").strip() or None
+        return None
+
+    @staticmethod
+    def _filled_qty_from_state(state: dict, trade) -> Decimal:
+        original_qty = Decimal(str(state.get("original_qty") or trade.qty or "0"))
+        current_qty = Decimal(str(trade.qty or "0"))
+        return original_qty - current_qty
 
     @staticmethod
     def _original_risk_distance(

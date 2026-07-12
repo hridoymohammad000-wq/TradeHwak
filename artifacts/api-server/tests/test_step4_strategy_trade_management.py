@@ -40,6 +40,9 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         service._repository = None
         submitted = []
         stops = []
+        service._bybit_service = SimpleNamespace(
+            get_order_history=lambda **kwargs: [{"orderStatus": "Created"}]
+        )
         service._submit_partial_close = lambda trade, qty, stage, key: submitted.append(
             (stage, qty)
         ) or "tp1-order"
@@ -79,6 +82,9 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         service._repository = None
         submitted = []
         stops = []
+        service._bybit_service = SimpleNamespace(
+            get_order_history=lambda **kwargs: [{"orderStatus": "Created"}]
+        )
         service._submit_partial_close = lambda trade, qty, stage, trade_key: submitted.append(
             (stage, qty)
         ) or "tp2-order"
@@ -119,6 +125,9 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         }
         service._repository = None
         stops = []
+        service._bybit_service = SimpleNamespace(
+            get_order_history=lambda **kwargs: [{"orderId": "tp1-order", "orderStatus": "Filled"}]
+        )
         service._tighten_stop = lambda trade, stop: stops.append(stop)
         service._persist = lambda: None
         trade = SimpleNamespace(
@@ -138,6 +147,47 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         self.assertEqual(stops, [Decimal("100")])
         self.assertTrue(service._state[key]["tp1_done"])
         self.assertNotIn("pending_stage", service._state[key])
+
+    def test_pending_tp1_waits_for_fill_confirmation(self):
+        service = TradeManagementService.__new__(TradeManagementService)
+        key = "BTCUSDT:2099-07-11T00:00:00+00:00"
+        service._state = {
+            key: {
+                "symbol": "BTCUSDT",
+                "opened_at": "2099-07-11T00:00:00+00:00",
+                "original_qty": "1",
+                "tp1_done": False,
+                "tp2_done": False,
+                "last_stop": 60.0,
+                "pending_stage": "tp1",
+                "pending_order_id": "tp1-order",
+                "pending_order_link_id": "stp4tp1btc",
+                "pending_expected_qty": "0.50",
+                "pending_submitted_qty": "0.50",
+                "pending_filled_baseline_qty": "0.00",
+            }
+        }
+        service._repository = None
+        service._bybit_service = SimpleNamespace(
+            get_order_history=lambda **kwargs: [{"orderId": "tp1-order", "orderStatus": "Created"}]
+        )
+        service._tighten_stop = lambda trade, stop: self.fail("stop must wait for fill confirmation")
+        service._persist = lambda: None
+        trade = SimpleNamespace(
+            symbol="BTCUSDT",
+            opened_at="2099-07-11T00:00:00+00:00",
+            direction=Direction.BUY,
+            entry_price=100,
+            current_price=160,
+            stop_loss=60,
+            qty="0.5",
+            planned_risk_usdt=40,
+        )
+
+        outcome = service._manage_trade(trade)
+
+        self.assertEqual(outcome, "pending")
+        self.assertFalse(service._state[key]["tp1_done"])
 
     def test_stop_never_loosens(self):
         self.assertTrue(

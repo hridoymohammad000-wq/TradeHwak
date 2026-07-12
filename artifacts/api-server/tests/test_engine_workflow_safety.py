@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import contextmanager
 import unittest
 from decimal import Decimal
 from threading import Event, Lock, Thread
@@ -96,18 +97,20 @@ class EngineWorkflowSafetyTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 409)
         self.assertIn("Daily trade limit of 3 reached", context.exception.detail)
 
-    def test_zero_max_open_positions_blocks_instead_of_falling_back(self):
+    def test_combined_open_positions_ignore_editable_zero_setting(self):
         service = self.managed_manual(
             LimitTradeService(),
             self.settings(max_open_positions=0),
         )
         payload = SimpleNamespace(symbol="BTCUSDT", mode=TradingMode.SCALPING)
+        original_execute = ManualTradeService.execute_manual_trade
+        ManualTradeService.execute_manual_trade = lambda self, payload, signal_id=None: "ok"
+        try:
+            result = service.execute_manual_trade(payload)
+        finally:
+            ManualTradeService.execute_manual_trade = original_execute
 
-        with self.assertRaises(HTTPException) as context:
-            service.execute_manual_trade(payload)
-
-        self.assertEqual(context.exception.status_code, 409)
-        self.assertIn("Overall open-position limit of 0 reached", context.exception.detail)
+        self.assertEqual(result, "ok")
 
     def test_daily_loss_budget_caps_new_trade_risk(self):
         service = ManualTradeService.__new__(ManualTradeService)
@@ -256,30 +259,43 @@ class BackgroundCycleSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"status": "reconciled", "total_open_trades": 1})
 
     def test_worker_leader_lock_skips_when_another_instance_is_active(self):
-        with (
-            patch.object(main.persistence_repository, "try_advisory_lock", return_value=False),
-            patch.object(main.persistence_repository, "advisory_unlock") as unlock,
-        ):
+        @contextmanager
+        def fake_session(name):
+            yield False
+
+        with patch.object(main.persistence_repository, "advisory_lock_session", fake_session):
             result = main._run_with_worker_leader_lock(
                 main.AUTO_TRADE_WORKER_LOCK,
                 lambda: self.fail("operation should not run without leader lock"),
             )
 
         self.assertEqual(result, {"status": "leader_not_acquired"})
-        unlock.assert_not_called()
 
     def test_worker_leader_lock_releases_after_operation(self):
-        with (
-            patch.object(main.persistence_repository, "try_advisory_lock", return_value=True),
-            patch.object(main.persistence_repository, "advisory_unlock") as unlock,
-        ):
+        events = []
+
+        @contextmanager
+        def fake_session(name):
+            events.append(("enter", name))
+            try:
+                yield True
+            finally:
+                events.append(("exit", name))
+
+        with patch.object(main.persistence_repository, "advisory_lock_session", fake_session):
             result = main._run_with_worker_leader_lock(
                 main.TRADE_MANAGEMENT_WORKER_LOCK,
                 lambda: {"status": "ok"},
             )
 
         self.assertEqual(result, {"status": "ok"})
-        unlock.assert_called_once_with(main.TRADE_MANAGEMENT_WORKER_LOCK)
+        self.assertEqual(
+            events,
+            [
+                ("enter", main.TRADE_MANAGEMENT_WORKER_LOCK),
+                ("exit", main.TRADE_MANAGEMENT_WORKER_LOCK),
+            ],
+        )
 
 
 if __name__ == "__main__":

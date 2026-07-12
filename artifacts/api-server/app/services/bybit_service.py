@@ -209,6 +209,60 @@ class BybitService:
         )
         return data.get("result", {}).get("list", []) or []
 
+    def get_position(self, symbol: str) -> dict | None:
+        target = str(symbol or "").upper()
+        for position in self.get_open_positions():
+            if str(position.get("symbol") or "").upper() != target:
+                continue
+            size = self._to_float(position.get("size")) or 0.0
+            if size <= 0:
+                continue
+            return position
+        return None
+
+    def get_order_history(
+        self,
+        *,
+        symbol: str,
+        order_id: str | None = None,
+        order_link_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        query = {
+            "category": "linear",
+            "symbol": str(symbol or "").upper(),
+            "limit": str(max(limit, 1)),
+        }
+        if order_id:
+            query["orderId"] = str(order_id)
+        if order_link_id:
+            query["orderLinkId"] = str(order_link_id)
+        data = self._private_get("/v5/order/history", parse.urlencode(query))
+        return data.get("result", {}).get("list", []) or []
+
+    def emergency_close_position(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: str,
+        order_link_id: str,
+    ) -> dict:
+        return self.create_private_order(
+            {
+                "category": "linear",
+                "symbol": str(symbol or "").upper(),
+                "side": side,
+                "orderType": "Market",
+                "qty": qty,
+                "timeInForce": "IOC",
+                "positionIdx": 0,
+                "reduceOnly": True,
+                "closeOnTrigger": False,
+                "orderLinkId": order_link_id,
+            }
+        )
+
     def get_closed_pnls(self, limit: int = 50) -> list[dict]:
         data = self._private_get(
             "/v5/position/closed-pnl",

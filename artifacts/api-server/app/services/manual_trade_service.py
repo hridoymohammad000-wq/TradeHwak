@@ -1,4 +1,5 @@
 import logging
+import time
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 
 from fastapi import HTTPException, status
@@ -195,6 +196,14 @@ class ManualTradeService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Bybit returned no orderId.",
             )
+        self._confirm_protection_or_emergency_close(
+            symbol=symbol,
+            direction=payload.direction,
+            qty=qty_string,
+            stop_loss=rounded_stop,
+            take_profit=rounded_take,
+            tick_size=constraints["tickSize"],
+        )
 
         response = ManualTradeResponse(
             message="Bybit demo trade submitted successfully.",
@@ -238,6 +247,79 @@ class ManualTradeService:
             },
         )
         return response
+
+    def _confirm_protection_or_emergency_close(
+        self,
+        *,
+        symbol: str,
+        direction: Direction,
+        qty: str,
+        stop_loss: Decimal,
+        take_profit: Decimal,
+        tick_size: Decimal,
+    ) -> None:
+        last_detail = "Protection confirmation failed."
+        protection_payload = {
+            "category": "linear",
+            "symbol": symbol,
+            "tpslMode": "Full",
+            "positionIdx": 0,
+            "stopLoss": self._format_decimal(stop_loss, tick_size),
+            "takeProfit": self._format_decimal(take_profit, tick_size),
+            "slTriggerBy": "MarkPrice",
+            "tpTriggerBy": "MarkPrice",
+        }
+        for attempt in range(2):
+            position = self._bybit_service.get_position(symbol)
+            if self._position_has_expected_protection(
+                position=position,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+            ):
+                return
+            last_detail = (
+                "Exchange position does not yet show the expected stop loss and take profit."
+            )
+            try:
+                self._bybit_service._private_post("/v5/position/trading-stop", protection_payload)
+            except HTTPException as exc:
+                last_detail = self._format_http_detail(exc.detail)
+            if attempt == 0:
+                time.sleep(0.35)
+
+        emergency_side = "Sell" if direction == Direction.BUY else "Buy"
+        close_order_id = None
+        try:
+            close = self._bybit_service.emergency_close_position(
+                symbol=symbol,
+                side=emergency_side,
+                qty=qty,
+                order_link_id=f"th{symbol.lower()}emergencyclose"[:36],
+            )
+            close_order_id = close.get("result", {}).get("orderId")
+        except HTTPException as exc:
+            last_detail = (
+                f"{last_detail} Emergency close failed: {self._format_http_detail(exc.detail)}"
+            )
+
+        self._log(
+            "protection_verification_failed",
+            {
+                "symbol": symbol,
+                "qty": qty,
+                "stop_loss": float(stop_loss),
+                "take_profit": float(take_profit),
+                "detail": last_detail,
+                "emergency_close_order_id": close_order_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Exchange protection could not be confirmed after two attempts; "
+                "reduce-only emergency close was sent."
+            ),
+        )
 
     def execute_strategy_trade(
         self,
@@ -640,6 +722,22 @@ class ManualTradeService:
         return f"{value:.{decimals}f}"
 
     @staticmethod
+    def _position_has_expected_protection(
+        *,
+        position: dict | None,
+        stop_loss: Decimal,
+        take_profit: Decimal,
+    ) -> bool:
+        if not position:
+            return False
+        try:
+            current_stop = Decimal(str(position.get("stopLoss") or "0"))
+            current_take = Decimal(str(position.get("takeProfit") or "0"))
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+        return current_stop == stop_loss and current_take == take_profit
+
+    @staticmethod
     def _rounded_protection_price(
         value: Decimal,
         tick: Decimal,
@@ -679,3 +777,13 @@ class ManualTradeService:
         risk = market - stop if direction == Direction.BUY else stop - market
         reward = take - market if direction == Direction.BUY else market - take
         return reward / risk if risk > 0 else Decimal("0")
+
+    @staticmethod
+    def _format_http_detail(detail) -> str:
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, dict):
+            code = detail.get("code") or detail.get("retCode")
+            message = detail.get("message") or detail.get("retMsg") or str(detail)
+            return f"Bybit code {code}: {message}" if code is not None else message
+        return str(detail)

@@ -34,6 +34,13 @@ FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 
 
 def _run_with_worker_leader_lock(lock_name: str, operation):
+    session = getattr(persistence_repository, "advisory_lock_session", None)
+    if callable(session):
+        with session(lock_name) as acquired:
+            if not acquired:
+                return {"status": "leader_not_acquired"}
+            return operation()
+
     locker = getattr(persistence_repository, "try_advisory_lock", None)
     unlocker = getattr(persistence_repository, "advisory_unlock", None)
     if not callable(locker) or not callable(unlocker):

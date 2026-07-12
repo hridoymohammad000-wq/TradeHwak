@@ -479,7 +479,7 @@ TradeHawk V2 will be considered complete only when:
   Symbol নয় - `orderId`, `execId`, `positionIdx` ও stable trade identity দিয়ে matching করতে হবে; duplicate journal/P&L বন্ধ করতে হবে।
 - [x] `V2-016 - Imported Trade Mode Preservation`
   Exchange trade-কে current selected mode দিয়ে label না করে original scalping/intraday mode restore করতে হবে।
-- [ ] `V2-017 - SL/TP Confirmation and Emergency Close`
+- [x] `V2-017 - SL/TP Confirmation and Emergency Close`
   Entry-এর পরে SL/TP exchange-এ সত্যিই attached হয়েছে কি না verify করতে হবে; দুইবার failure হলে reduce-only emergency close করতে হবে।
 - [x] `V2-018 - Atomic TP1/TP2 Management`
   Partial exit fill confirm হওয়ার আগে `tp1_done`/`tp2_done` set করা যাবে না; retry-safe state machine করতে হবে।

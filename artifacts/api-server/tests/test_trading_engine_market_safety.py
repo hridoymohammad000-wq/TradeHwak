@@ -65,6 +65,63 @@ class TradingEngineMarketSafetyTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertLessEqual(len(first), 36)
 
+    def test_protection_confirmation_accepts_matching_position(self):
+        self.assertTrue(
+            ManualTradeService._position_has_expected_protection(
+                position={"stopLoss": "95", "takeProfit": "110"},
+                stop_loss=Decimal("95"),
+                take_profit=Decimal("110"),
+            )
+        )
+
+    def test_protection_confirmation_retries_then_succeeds(self):
+        service = ManualTradeService.__new__(ManualTradeService)
+        calls = {"attach": 0}
+        positions = [
+            None,
+            {"stopLoss": "95", "takeProfit": "110"},
+        ]
+        service._bybit_service = SimpleNamespace(
+            get_position=lambda symbol: positions.pop(0) if positions else {"stopLoss": "95", "takeProfit": "110"},
+            _private_post=lambda path, payload: calls.__setitem__("attach", calls["attach"] + 1),
+            emergency_close_position=lambda **kwargs: self.fail("emergency close should not run"),
+        )
+        service._log = lambda *args, **kwargs: None
+
+        service._confirm_protection_or_emergency_close(
+            symbol="BTCUSDT",
+            direction=Direction.BUY,
+            qty="0.01",
+            stop_loss=Decimal("95"),
+            take_profit=Decimal("110"),
+            tick_size=Decimal("0.1"),
+        )
+
+        self.assertEqual(calls["attach"], 1)
+
+    def test_protection_confirmation_emergency_closes_after_two_failures(self):
+        service = ManualTradeService.__new__(ManualTradeService)
+        emergency_calls = []
+        service._bybit_service = SimpleNamespace(
+            get_position=lambda symbol: None,
+            _private_post=lambda path, payload: {"retCode": 0},
+            emergency_close_position=lambda **kwargs: emergency_calls.append(kwargs) or {"result": {"orderId": "close-1"}},
+        )
+        service._log = lambda *args, **kwargs: None
+
+        with self.assertRaises(HTTPException) as context:
+            service._confirm_protection_or_emergency_close(
+                symbol="BTCUSDT",
+                direction=Direction.BUY,
+                qty="0.01",
+                stop_loss=Decimal("95"),
+                take_profit=Decimal("110"),
+                tick_size=Decimal("0.1"),
+            )
+
+        self.assertIn("emergency close was sent", context.exception.detail.lower())
+        self.assertEqual(len(emergency_calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import zlib
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -174,6 +174,54 @@ class PersistenceRepository:
         if table not in allowed:
             raise ValueError(f"Unsupported log table: {table}")
         self._execute(f"INSERT INTO {table} (event_type, payload) VALUES (%s, %s::jsonb)", (event_type, self._json(payload)))
+
+    @contextmanager
+    def advisory_lock_session(self, name: str):
+        if not self.enabled:
+            yield True
+            return
+        if name in self._advisory_lock_connections:
+            yield True
+            return
+
+        key = self._advisory_lock_key(name)
+        connection = None
+        acquired = False
+        try:
+            connection = self._connect()
+            row = connection.execute(
+                "SELECT pg_try_advisory_lock(%s) AS acquired",
+                (key,),
+            ).fetchone()
+            acquired = bool(row and row.get("acquired"))
+            if not acquired:
+                with suppress(Exception):
+                    connection.close()
+                yield False
+                return
+            self._advisory_lock_connections[name] = connection
+            self.last_error = None
+            yield True
+        except Exception as exc:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.close()
+            self._handle_error("Advisory lock acquisition failed", exc)
+            yield False
+        finally:
+            held = self._advisory_lock_connections.pop(name, None)
+            if acquired and held is not None:
+                try:
+                    held.execute(
+                        "SELECT pg_advisory_unlock(%s) AS released",
+                        (key,),
+                    ).fetchone()
+                    self.last_error = None
+                except Exception as exc:
+                    self._handle_error("Advisory lock release failed", exc)
+                finally:
+                    with suppress(Exception):
+                        held.close()
 
     def try_advisory_lock(self, name: str) -> bool:
         if not self.enabled:
