@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.api.routes import auth, challenge
 from app.double_down.service import ChallengeService
+from app.services.system_service import SystemService
 
 
 class FailingPersistence:
@@ -110,6 +111,26 @@ class DoubleDownPhase11Tests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["message"], "challenge persistence unavailable")
+
+    def test_health_readiness_includes_double_down_persistence(self):
+        repository = type(
+            "RepositoryStub",
+            (),
+            {
+                "verify_execution_ready": staticmethod(
+                    lambda: (
+                        False,
+                        "Required database tables are missing: double_down_challenges",
+                    )
+                )
+            },
+        )()
+
+        health = SystemService(repository=repository).get_health()
+
+        self.assertEqual(health.data.status, "degraded")
+        self.assertFalse(health.data.persistence_ready)
+        self.assertIn("double_down_challenges", health.data.block_reason)
 
 
 if __name__ == "__main__":

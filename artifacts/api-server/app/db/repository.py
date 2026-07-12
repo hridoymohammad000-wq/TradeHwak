@@ -28,6 +28,7 @@ class PersistenceRepository:
         "profit_tracking_state",
         "workflow_state",
         "execution_logs",
+        "double_down_challenges",
     )
 
     def __init__(self, database_url: str | None) -> None:
@@ -82,8 +83,9 @@ class PersistenceRepository:
                 connection.execute("SELECT signal_id FROM executed_signal_ids LIMIT 1").fetchall()
                 connection.execute("SELECT state FROM profit_tracking_state WHERE id = 1").fetchone()
                 connection.execute("SELECT state FROM workflow_state WHERE id = 1").fetchone()
-            self.last_error = None
-            return True, None
+                connection.execute("SELECT snapshot FROM double_down_challenges LIMIT 1").fetchall()
+                self.last_error = None
+                return True, None
         except Exception as exc:
             self._handle_error("Database readiness check failed", exc)
             return False, self.last_error

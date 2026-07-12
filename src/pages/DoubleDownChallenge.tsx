@@ -32,14 +32,27 @@ const money = (value: string | number) => `${Number(value).toFixed(2)} USDT`;
 export default function DoubleDownChallenge() {
   const [startingBalance, setStartingBalance] = useState(100);
   const [failureFloor, setFailureFloor] = useState(20);
+  const [challenges, setChallenges] = useState<ChallengeSnapshot[]>([]);
+  const [selectedChallengeId, setSelectedChallengeId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<ChallengeSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadChallenges = async (preferredChallengeId?: string | null) => {
+    const items = await apiRequest<ChallengeSnapshot[]>('/api/challenge', { method: 'GET' });
+    setChallenges(items);
+    const resolvedId = preferredChallengeId
+      ?? selectedChallengeId
+      ?? items[0]?.config.challenge_id
+      ?? null;
+    setSelectedChallengeId(resolvedId);
+    setSnapshot(items.find((item) => item.config.challenge_id === resolvedId) || items[0] || null);
+  };
+
   useEffect(() => {
-    void apiRequest<ChallengeSnapshot[]>('/api/challenge', { method: 'GET' })
-      .then((items) => setSnapshot(items[0] || null))
-      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Failed to load challenge'));
+    void loadChallenges().catch((reason) => {
+      setError(reason instanceof Error ? reason.message : 'Failed to load challenge');
+    });
   }, []);
 
   const progress = useMemo(() => {
@@ -59,7 +72,7 @@ export default function DoubleDownChallenge() {
         method: 'POST',
         body: { starting_balance: startingBalance, failure_floor: failureFloor },
       });
-      setSnapshot(created);
+      await loadChallenges(created.config.challenge_id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Challenge creation failed');
     } finally {
@@ -75,7 +88,7 @@ export default function DoubleDownChallenge() {
       const updated = await apiRequest<ChallengeSnapshot>(`/api/challenge/${snapshot.config.challenge_id}/${name}`, {
         method: 'POST',
       });
-      setSnapshot(updated);
+      await loadChallenges(updated.config.challenge_id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Challenge action failed');
     } finally {
@@ -98,6 +111,26 @@ export default function DoubleDownChallenge() {
             </div>
             <h1 className="mt-3 text-3xl font-black text-white">Double Down Challenge</h1>
             <p className="mt-2 text-sm text-slate-400">Persistent challenge state and controls are connected to the backend. Live-money mode remains blocked.</p>
+            {challenges.length > 0 && (
+              <label className="mt-4 block max-w-sm">
+                <span className="text-[10px] uppercase font-mono text-slate-500">Active challenge</span>
+                <select
+                  value={selectedChallengeId ?? ''}
+                  onChange={(event) => {
+                    const nextId = event.target.value || null;
+                    setSelectedChallengeId(nextId);
+                    setSnapshot(challenges.find((item) => item.config.challenge_id === nextId) || null);
+                  }}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                >
+                  {challenges.map((item, index) => (
+                    <option key={item.config.challenge_id} value={item.config.challenge_id}>
+                      {`Challenge ${index + 1} · ${item.state.status} · ${money(item.state.current_balance)}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           {snapshot && (
             <div className="flex flex-wrap gap-2">
@@ -126,6 +159,9 @@ export default function DoubleDownChallenge() {
           <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400">Failure Floor</label>
           <input className="mb-5 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white" type="number" min={1} value={failureFloor} onChange={(event) => setFailureFloor(Number(event.target.value))} />
           <button disabled={busy} onClick={() => void createChallenge()} className="rounded-lg bg-amber-400 px-4 py-2.5 text-sm font-black text-slate-950 disabled:opacity-50">Create Isolated Challenge</button>
+          {challenges.length > 0 && (
+            <p className="mt-4 text-xs text-slate-500">{`${challenges.length} challenge${challenges.length === 1 ? '' : 's'} available.`}</p>
+          )}
         </section>
       ) : (
         <>
