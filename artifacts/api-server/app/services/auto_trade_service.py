@@ -6,6 +6,11 @@ from fastapi import HTTPException
 
 from app.core.enums import TradingMode
 from app.core.trading_clock import is_on_trading_date, trading_date
+from app.core.trading_rules import (
+    COMBINED_DAILY_MAX_LOSS_PCT,
+    COMBINED_MAX_OPEN_TRADES,
+    trading_rule,
+)
 from app.db.repository import PersistenceRepository
 from app.schemas.workflow import (
     WorkflowOrderSnapshot,
@@ -27,18 +32,18 @@ logger = logging.getLogger(__name__)
 
 class AutoTradeService:
     MODE_OPEN_LIMITS = {
-        TradingMode.SCALPING: 5,
-        TradingMode.INTRADAY: 3,
+        TradingMode.SCALPING: COMBINED_MAX_OPEN_TRADES,
+        TradingMode.INTRADAY: COMBINED_MAX_OPEN_TRADES,
     }
     MODE_LEVERAGE = {
         TradingMode.SCALPING: 10,
         TradingMode.INTRADAY: 5,
     }
     MODE_REALIZED_LOSS_LIMIT_PCT = {
-        TradingMode.SCALPING: -2.0,
-        TradingMode.INTRADAY: -3.0,
+        TradingMode.SCALPING: -float(trading_rule(TradingMode.SCALPING).daily_max_net_loss_pct),
+        TradingMode.INTRADAY: -float(trading_rule(TradingMode.INTRADAY).daily_max_net_loss_pct),
     }
-    COMBINED_REALIZED_LOSS_LIMIT_PCT = -5.0
+    COMBINED_REALIZED_LOSS_LIMIT_PCT = -float(COMBINED_DAILY_MAX_LOSS_PCT)
 
     def __init__(
         self,
@@ -144,6 +149,16 @@ class AutoTradeService:
                 return {"status": "realized_loss_stop", "opened": 0}
 
             active_data = self._trade_service.get_active_trades().data
+            if (
+                len(active_data.scalping_trades) + len(active_data.intraday_trades)
+                >= COMBINED_MAX_OPEN_TRADES
+            ):
+                self._last_execution_status = "blocked"
+                self._last_reject_reason = (
+                    f"Combined open-position limit of {COMBINED_MAX_OPEN_TRADES} reached."
+                )
+                return {"status": "open_position_stop", "opened": 0}
+
             open_counts = {
                 TradingMode.SCALPING: len(active_data.scalping_trades),
                 TradingMode.INTRADAY: len(active_data.intraday_trades),

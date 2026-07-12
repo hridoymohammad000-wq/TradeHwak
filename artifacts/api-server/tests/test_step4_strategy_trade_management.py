@@ -47,7 +47,7 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         service._persist = lambda: None
         trade = SimpleNamespace(
             symbol="BTCUSDT",
-            opened_at="2026-07-11T00:00:00+00:00",
+            opened_at="2099-07-11T00:00:00+00:00",
             direction=Direction.BUY,
             entry_price=100,
             current_price=160,
@@ -64,11 +64,11 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
 
     def test_tp2_triggers_at_two_r_after_tp1_with_reduced_quantity(self):
         service = TradeManagementService.__new__(TradeManagementService)
-        key = "BTCUSDT:2026-07-11T00:00:00+00:00"
+        key = "BTCUSDT:2099-07-11T00:00:00+00:00"
         service._state = {
             key: {
                 "symbol": "BTCUSDT",
-                "opened_at": "2026-07-11T00:00:00+00:00",
+                "opened_at": "2099-07-11T00:00:00+00:00",
                 "original_qty": "1",
                 "tp1_done": True,
                 "tp2_done": False,
@@ -85,7 +85,7 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         service._persist = lambda: None
         trade = SimpleNamespace(
             symbol="BTCUSDT",
-            opened_at="2026-07-11T00:00:00+00:00",
+            opened_at="2099-07-11T00:00:00+00:00",
             direction=Direction.BUY,
             entry_price=100,
             current_price=180,

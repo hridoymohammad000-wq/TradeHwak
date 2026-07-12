@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 
 from app.core.enums import ChartStatus, Timeframe, TradingMode
+from app.core.trading_rules import trading_rule
 from app.schemas.chart_context import (
     ChartCandle,
     ChartContextData,
@@ -33,9 +34,7 @@ class ChartContextService:
                 detail="Symbol must not be blank.",
             )
 
-        selected_timeframe = timeframe or (
-            Timeframe.M5 if mode == TradingMode.SCALPING else Timeframe.M15
-        )
+        selected_timeframe = timeframe or trading_rule(mode).setup_timeframe
         interval = self._INTERVALS[selected_timeframe]
         payload = self._bybit_service._get_closed_klines(
             normalized_symbol,

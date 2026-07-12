@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from app.core.enums import Direction, SignalGrade, Timeframe, TradingMode
+from app.core.trading_rules import trading_rule
 from app.services.bybit_service import BybitService
 
 
@@ -33,7 +34,10 @@ class StrategyService:
         TradingMode.INTRADAY: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"],
     }
     _TOP_VOLUME_LIMITS = {TradingMode.SCALPING: 8, TradingMode.INTRADAY: 12}
-    _DEFAULT_TIMEFRAME = {TradingMode.SCALPING: Timeframe.M5, TradingMode.INTRADAY: Timeframe.M15}
+    _DEFAULT_TIMEFRAME = {
+        TradingMode.SCALPING: trading_rule(TradingMode.SCALPING).setup_timeframe,
+        TradingMode.INTRADAY: trading_rule(TradingMode.INTRADAY).setup_timeframe,
+    }
     _INTERVAL_MAP = {Timeframe.M1: "1", Timeframe.M5: "5", Timeframe.M15: "15", Timeframe.H1: "60"}
     _HIGHER_INTERVAL = {TradingMode.SCALPING: "60", TradingMode.INTRADAY: "240"}
 

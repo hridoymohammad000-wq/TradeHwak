@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
 from app.core.enums import TradingMode
+from app.core.trading_rules import COMBINED_MAX_OPEN_TRADES
 from app.schemas.trades import ManualTradeRequest, ManualTradeResponse
 from app.services.manual_trade_service import ManualTradeService
 
@@ -9,8 +10,8 @@ class ManagedManualTradeService(ManualTradeService):
     """Enforce final execution gates immediately before order submission."""
 
     MODE_OPEN_LIMITS = {
-        TradingMode.SCALPING: 5,
-        TradingMode.INTRADAY: 3,
+        TradingMode.SCALPING: COMBINED_MAX_OPEN_TRADES,
+        TradingMode.INTRADAY: COMBINED_MAX_OPEN_TRADES,
     }
     def execute_manual_trade(
         self,
@@ -54,7 +55,7 @@ class ManagedManualTradeService(ManualTradeService):
                 ),
             )
 
-        overall_limit = settings.max_open_positions
+        overall_limit = min(settings.max_open_positions, COMBINED_MAX_OPEN_TRADES)
         if len(active.scalping_trades) + len(active.intraday_trades) >= overall_limit:
             raise HTTPException(
                 status_code=409,

@@ -4,6 +4,8 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from fastapi import HTTPException, status
 
 from app.core.enums import Direction, Timeframe, TradingMode
+from app.core.trading_clock import is_on_trading_date, trading_date
+from app.core.trading_rules import COMBINED_DAILY_MAX_LOSS_PCT, trading_rule
 from app.db.repository import PersistenceRepository
 from app.schemas.trades import ManualTradeData, ManualTradeRequest, ManualTradeResponse
 from app.services.bybit_service import BybitService
@@ -78,18 +80,21 @@ class ManualTradeService:
         self._validate_price_order(payload.direction, market_price, rounded_stop, rounded_take)
 
         risk_distance = abs(market_price - rounded_stop)
+        account_equity = Decimal(str(wallet["equity"]))
         available_balance = Decimal(str(wallet["available"]))
-        if available_balance <= 0 or risk_distance <= 0:
+        if account_equity <= 0 or available_balance <= 0 or risk_distance <= 0:
             raise HTTPException(status_code=400, detail="Balance or risk distance is invalid.")
 
+        rule = trading_rule(payload.mode)
         configured_risk_budget = (
-            available_balance
-            * Decimal(str(settings_state.risk_per_trade_pct))
+            account_equity
+            * rule.risk_per_trade_pct
             / Decimal("100")
         )
-        risk_budget = self._apply_daily_loss_guard(
+        risk_budget = self._apply_v2_daily_loss_guard(
             configured_risk_budget,
-            settings_state.daily_max_loss,
+            payload.mode,
+            account_equity,
         )
         risk_budget = self._apply_profit_lock_guard(risk_budget)
 
@@ -121,10 +126,13 @@ class ManualTradeService:
         risk_reward = self._risk_reward(
             payload.direction, market_price, rounded_stop, rounded_take
         )
-        if risk_reward < Decimal("2"):
+        if risk_reward < rule.minimum_risk_reward:
             raise HTTPException(
                 status_code=400,
-                detail=f"Risk-reward {risk_reward:.2f} is below 2.00.",
+                detail=(
+                    f"Risk-reward {risk_reward:.2f} is below "
+                    f"{rule.minimum_risk_reward:.2f}."
+                ),
             )
 
         side = "Buy" if payload.direction == Direction.BUY else "Sell"
@@ -204,6 +212,8 @@ class ManualTradeService:
                 "signal_id": signal_id,
                 "configured_risk_budget_usdt": float(configured_risk_budget),
                 "approved_risk_budget_usdt": float(risk_budget),
+                "account_equity_usdt": float(account_equity),
+                "v2_risk_per_trade_pct": float(rule.risk_per_trade_pct),
             },
         )
         return response
@@ -274,6 +284,43 @@ class ManualTradeService:
             raise HTTPException(status_code=400, detail="Daily max loss limit reached.")
         return min(configured_risk_budget, Decimal(str(remaining)))
 
+    def _apply_v2_daily_loss_guard(
+        self,
+        configured_risk_budget: Decimal,
+        mode: TradingMode,
+        account_equity: Decimal,
+    ) -> Decimal:
+        combined_budget = account_equity * COMBINED_DAILY_MAX_LOSS_PCT / Decimal("100")
+        combined_remaining = Decimal(
+            str(self._trade_service.get_remaining_daily_loss_budget(float(combined_budget)))
+        )
+        if combined_remaining <= 0:
+            raise HTTPException(status_code=400, detail="Combined daily max loss limit reached.")
+
+        rule = trading_rule(mode)
+        mode_budget = account_equity * rule.daily_max_net_loss_pct / Decimal("100")
+        mode_realized_loss = self._mode_daily_realized_loss(mode)
+        mode_remaining = mode_budget - mode_realized_loss
+        if mode_remaining <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{mode.value.title()} daily max loss limit reached.",
+            )
+
+        return min(configured_risk_budget, combined_remaining, mode_remaining)
+
+    def _mode_daily_realized_loss(self, mode: TradingMode) -> Decimal:
+        today = trading_date()
+        response = self._trade_service.get_closed_trades()
+        loss = Decimal("0")
+        for trade in response.data.closed_trades:
+            if trade.mode != mode or not is_on_trading_date(trade.closed_time, today):
+                continue
+            realized = Decimal(str(trade.realized_pnl or 0))
+            if realized < 0:
+                loss += abs(realized)
+        return loss
+
     def _resolve_protection_prices(
         self,
         *,
@@ -302,9 +349,8 @@ class ManualTradeService:
             Timeframe.M15: "15",
             Timeframe.H1: "60",
         }
-        interval = interval_map.get(
-            timeframe, "5" if mode == TradingMode.SCALPING else "15"
-        )
+        selected_timeframe = timeframe or trading_rule(mode).setup_timeframe
+        interval = interval_map[selected_timeframe]
         try:
             candles = self._load_ohlc(symbol, interval, 80)
             atr = self._atr(candles, 14)
@@ -339,9 +385,9 @@ class ManualTradeService:
                 else market_price + distance
             )
             generated_tp = (
-                market_price + distance * Decimal("2")
+                market_price + distance * trading_rule(mode).minimum_risk_reward
                 if direction == Direction.BUY
-                else market_price - distance * Decimal("2")
+                else market_price - distance * trading_rule(mode).minimum_risk_reward
             )
             self._log(
                 "protection_generated",
@@ -363,15 +409,16 @@ class ManualTradeService:
                 if mode == TradingMode.SCALPING
                 else Decimal("0.0100")
             )
+            reward_multiple = trading_rule(mode).minimum_risk_reward
             logger.warning("ATR swing fallback for %s: %s", symbol, exc)
             if direction == Direction.BUY:
                 return (
                     market_price * (Decimal("1") - fallback_pct),
-                    market_price * (Decimal("1") + fallback_pct * Decimal("2")),
+                    market_price * (Decimal("1") + fallback_pct * reward_multiple),
                 )
             return (
                 market_price * (Decimal("1") + fallback_pct),
-                market_price * (Decimal("1") - fallback_pct * Decimal("2")),
+                market_price * (Decimal("1") - fallback_pct * reward_multiple),
             )
 
     def _load_ohlc(

@@ -34,7 +34,7 @@ class StepFourStrategyTests(unittest.TestCase):
         candles = [Candle(100 + i, 101 + i, 99 + i, 100.5 + i, 1000) for i in range(20)]
         self.assertIsNotNone(StrategyService._atr(candles, 14))
 
-    def test_long_atr_swing_stop_and_two_rr(self):
+    def test_long_scalping_atr_swing_stop_and_one_point_five_rr(self):
         service = ManualTradeService.__new__(ManualTradeService)
         service._bybit_service = FakeBybit()
         service._repository = None
@@ -49,9 +49,9 @@ class StepFourStrategyTests(unittest.TestCase):
         )
         self.assertLess(stop, Decimal("105"))
         self.assertGreater(take, Decimal("105"))
-        self.assertAlmostEqual(float((take - Decimal("105")) / (Decimal("105") - stop)), 2.0, places=6)
+        self.assertAlmostEqual(float((take - Decimal("105")) / (Decimal("105") - stop)), 1.5, places=6)
 
-    def test_short_atr_swing_stop_and_two_rr(self):
+    def test_short_intraday_atr_swing_stop_and_two_rr(self):
         service = ManualTradeService.__new__(ManualTradeService)
         service._bybit_service = FakeBybit()
         service._repository = None

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 from fastapi import HTTPException
 
 from app.core.enums import Direction, TradingMode
+from app.core.trading_rules import trading_rule
 from app.db.repository import PersistenceRepository
 from app.services.bybit_service import BybitService
 from app.services.trade_service import TradeService
@@ -15,12 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class TradeManagementService:
-    """Manage mode-specific partial exits, break-even and one-way trailing stops.
-
-    Scalping: TP1 at 1.5R closes 50%; TP2 at 2R closes 30%; 20% runner trails.
-    Intraday: TP1 at 2R closes 50%; TP2 at 3R closes 30%; 20% runner trails.
-    Stops never loosen.
-    """
+    """Manage mode-specific exits while stops never loosen."""
 
     def __init__(
         self,
@@ -47,7 +44,14 @@ class TradeManagementService:
         active_keys = {self._key(trade) for trade in trades}
         self._state = {key: value for key, value in self._state.items() if key in active_keys}
 
-        result = {"tp1": 0, "tp2": 0, "trailed": 0, "skipped": 0, "failed": 0}
+        result = {
+            "tp1": 0,
+            "tp2": 0,
+            "trailed": 0,
+            "duration_closed": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
         for trade in trades:
             try:
                 outcome = self._manage_trade(trade)
@@ -84,6 +88,11 @@ class TradeManagementService:
         if risk <= 0 or original_qty <= 0:
             return "skipped"
 
+        if self._duration_expired(trade):
+            self._submit_partial_close(trade, Decimal(str(trade.qty)), "duration", key)
+            self._persist()
+            return "duration_closed"
+
         tp1_r, tp2_r = self._profit_targets(trade)
         r_multiple = self._r_multiple(trade.direction, entry, current, risk)
 
@@ -108,7 +117,11 @@ class TradeManagementService:
             self._persist()
             return "tp2"
 
-        if state.get("tp2_done") and r_multiple >= tp2_r:
+        if (
+            state.get("tp2_done")
+            and r_multiple >= tp2_r
+            and self._trailing_enabled(trade)
+        ):
             candidate = current - risk if trade.direction == Direction.BUY else current + risk
             if self._strictly_improves(trade.direction, old_stop, candidate):
                 self._tighten_stop(trade, candidate)
@@ -124,6 +137,36 @@ class TradeManagementService:
         if mode == TradingMode.INTRADAY or mode_value == TradingMode.INTRADAY.value:
             return Decimal("2"), Decimal("3")
         return Decimal("1.5"), Decimal("2")
+
+    @staticmethod
+    def _trailing_enabled(trade) -> bool:
+        mode = TradeManagementService._trade_mode(trade)
+        return trading_rule(mode).trailing_stop_enabled
+
+    @staticmethod
+    def _duration_expired(trade) -> bool:
+        opened_at = getattr(trade, "opened_at", None)
+        if not opened_at:
+            return False
+        try:
+            opened = datetime.fromisoformat(str(opened_at).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=timezone.utc)
+        elapsed_minutes = (
+            datetime.now(timezone.utc) - opened.astimezone(timezone.utc)
+        ).total_seconds() / 60
+        return elapsed_minutes >= trading_rule(
+            TradeManagementService._trade_mode(trade)
+        ).max_trade_duration_minutes
+
+    @staticmethod
+    def _trade_mode(trade) -> TradingMode:
+        mode = getattr(trade, "mode", TradingMode.SCALPING)
+        if isinstance(mode, TradingMode):
+            return mode
+        return TradingMode(str(mode))
 
     def _submit_partial_close(self, trade, requested_qty: Decimal, stage: str, key: str) -> None:
         instrument = self._bybit_service.get_validated_symbol(trade.symbol)["instrument"]

@@ -65,7 +65,7 @@ class ManagedWorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(
             ManagedManualTradeService.MODE_OPEN_LIMITS[TradingMode.INTRADAY],
-            3,
+            5,
         )
 
 

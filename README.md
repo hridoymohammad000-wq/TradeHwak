@@ -248,6 +248,12 @@ Approved V2 rules:
 
 Separate scalping and intraday configuration instead of using one shared risk and trade-management configuration.
 
+### Status
+
+Completed on July 12, 2026.
+
+Scalping and intraday now use separate V2 trading rules for setup timeframe, risk per trade, minimum risk-to-reward, daily net loss limits, maximum trade duration, and trailing-stop behavior. The combined daily loss and open-position limits are enforced through the shared V2 rule configuration.
+
 ---
 
 ### 4. Trade Management Frequency
@@ -363,7 +369,7 @@ TradeHawk V2 should be developed sequentially.
 ```text
 V2-001 — Backend API Authentication (Completed on July 12, 2026)
 V2-002 — Production Database Safety (Completed on July 12, 2026)
-V2-003 — Trading Rule Alignment
+V2-003 — Trading Rule Alignment (Completed on July 12, 2026)
 V2-004 — Independent Trade Management Worker
 V2-005 — Position Sizing and Margin Validation
 V2-006 — Distributed Lock and Idempotency
