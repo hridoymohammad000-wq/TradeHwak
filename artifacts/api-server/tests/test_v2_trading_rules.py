@@ -54,6 +54,7 @@ class V2TradingRulesTests(unittest.TestCase):
         self.assertEqual(scalping.daily_max_net_loss_pct, Decimal("2"))
         self.assertEqual(scalping.max_trade_duration_minutes, 59)
         self.assertFalse(scalping.trailing_stop_enabled)
+        self.assertEqual(scalping.leverage, 10)
 
         self.assertEqual(intraday.setup_timeframe, Timeframe.M5)
         self.assertEqual(intraday.risk_per_trade_pct, Decimal("1"))
@@ -61,6 +62,7 @@ class V2TradingRulesTests(unittest.TestCase):
         self.assertEqual(intraday.daily_max_net_loss_pct, Decimal("3"))
         self.assertEqual(intraday.max_trade_duration_minutes, 360)
         self.assertTrue(intraday.trailing_stop_enabled)
+        self.assertEqual(intraday.leverage, 5)
 
         self.assertEqual(COMBINED_DAILY_MAX_LOSS_PCT, Decimal("5"))
         self.assertEqual(COMBINED_MAX_OPEN_TRADES, 5)

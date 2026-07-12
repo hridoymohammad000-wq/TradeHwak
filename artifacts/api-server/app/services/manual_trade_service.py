@@ -123,6 +123,13 @@ class ManualTradeService:
         planned_risk = qty * risk_distance
         if planned_risk > risk_budget:
             raise HTTPException(status_code=400, detail="Planned risk exceeds approved risk budget.")
+        self._validate_margin_and_exposure(
+            mode=payload.mode,
+            account_equity=account_equity,
+            available_balance=available_balance,
+            notional=notional,
+            planned_risk=planned_risk,
+        )
         risk_reward = self._risk_reward(
             payload.direction, market_price, rounded_stop, rounded_take
         )
@@ -151,6 +158,9 @@ class ManualTradeService:
             "tpTriggerBy": "MarkPrice",
         }
         try:
+            leverage_setter = getattr(self._bybit_service, "set_symbol_leverage", None)
+            if callable(leverage_setter):
+                leverage_setter(symbol, rule.leverage)
             order = self._bybit_service.create_private_order(order_payload)
         except HTTPException as exc:
             self._log(
@@ -320,6 +330,71 @@ class ManualTradeService:
             if realized < 0:
                 loss += abs(realized)
         return loss
+
+    def _validate_margin_and_exposure(
+        self,
+        *,
+        mode: TradingMode,
+        account_equity: Decimal,
+        available_balance: Decimal,
+        notional: Decimal,
+        planned_risk: Decimal,
+    ) -> None:
+        rule = trading_rule(mode)
+        leverage = Decimal(str(rule.leverage))
+        if leverage <= 0:
+            raise HTTPException(status_code=400, detail="Configured leverage is invalid.")
+
+        active_notional, active_planned_risk = self._active_position_totals()
+        required_margin = notional / leverage
+        if required_margin > available_balance:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Required margin {required_margin:.2f} exceeds available balance "
+                    f"{available_balance:.2f} at {rule.leverage}x leverage."
+                ),
+            )
+
+        exposure_cap = account_equity * leverage
+        total_exposure = active_notional + notional
+        if total_exposure > exposure_cap:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Total exposure {total_exposure:.2f} exceeds exposure cap "
+                    f"{exposure_cap:.2f} at {rule.leverage}x leverage."
+                ),
+            )
+
+        combined_loss_budget = account_equity * COMBINED_DAILY_MAX_LOSS_PCT / Decimal("100")
+        combined_remaining = Decimal(
+            str(self._trade_service.get_remaining_daily_loss_budget(float(combined_loss_budget)))
+        )
+        risk_capacity = combined_remaining - active_planned_risk
+        if risk_capacity <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Existing open-position risk already uses the remaining daily loss capacity.",
+            )
+        if planned_risk > risk_capacity:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Planned risk {planned_risk:.2f} exceeds remaining risk capacity "
+                    f"{risk_capacity:.2f} after existing open-position risk."
+                ),
+            )
+
+    def _active_position_totals(self) -> tuple[Decimal, Decimal]:
+        active = self._trade_service.get_active_trades().data
+        active_records = [*active.scalping_trades, *active.intraday_trades]
+        total_notional = Decimal("0")
+        total_planned_risk = Decimal("0")
+        for trade in active_records:
+            total_notional += Decimal(str(trade.notional or 0))
+            total_planned_risk += Decimal(str(trade.planned_risk_usdt or 0))
+        return total_notional, total_planned_risk
 
     def _resolve_protection_prices(
         self,

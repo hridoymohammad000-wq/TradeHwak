@@ -12,6 +12,7 @@ class ModeTradingRule:
     daily_max_net_loss_pct: Decimal
     max_trade_duration_minutes: int
     trailing_stop_enabled: bool
+    leverage: int
 
 
 V2_TRADING_RULES = {
@@ -22,6 +23,7 @@ V2_TRADING_RULES = {
         daily_max_net_loss_pct=Decimal("2"),
         max_trade_duration_minutes=59,
         trailing_stop_enabled=False,
+        leverage=10,
     ),
     TradingMode.INTRADAY: ModeTradingRule(
         setup_timeframe=Timeframe.M5,
@@ -30,6 +32,7 @@ V2_TRADING_RULES = {
         daily_max_net_loss_pct=Decimal("3"),
         max_trade_duration_minutes=360,
         trailing_stop_enabled=True,
+        leverage=5,
     ),
 }
 

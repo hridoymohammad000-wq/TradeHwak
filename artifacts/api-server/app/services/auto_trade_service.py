@@ -35,10 +35,6 @@ class AutoTradeService:
         TradingMode.SCALPING: COMBINED_MAX_OPEN_TRADES,
         TradingMode.INTRADAY: COMBINED_MAX_OPEN_TRADES,
     }
-    MODE_LEVERAGE = {
-        TradingMode.SCALPING: 10,
-        TradingMode.INTRADAY: 5,
-    }
     MODE_REALIZED_LOSS_LIMIT_PCT = {
         TradingMode.SCALPING: -float(trading_rule(TradingMode.SCALPING).daily_max_net_loss_pct),
         TradingMode.INTRADAY: -float(trading_rule(TradingMode.INTRADAY).daily_max_net_loss_pct),
@@ -240,7 +236,7 @@ class AutoTradeService:
                     try:
                         leverage_setter = getattr(self._bybit_service, "set_symbol_leverage", None)
                         if callable(leverage_setter):
-                            leverage_setter(signal.symbol, self.MODE_LEVERAGE[mode])
+                            leverage_setter(signal.symbol, trading_rule(mode).leverage)
                         order = self._manual_trade_service.execute_strategy_trade(
                             symbol=signal.symbol,
                             direction=signal.direction,

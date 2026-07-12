@@ -308,6 +308,12 @@ The approved model requires risk to be calculated from total account capital whi
 
 Add a final margin-affordability and exposure check before submitting any order.
 
+### Status
+
+Completed on July 12, 2026.
+
+Position sizing now calculates risk from total account equity and performs a final pre-order validation against available margin, configured leverage, total open exposure, exchange quantity and notional limits, and existing open-position risk.
+
 ---
 
 ### 6. Multi-Worker Duplicate Execution
@@ -377,7 +383,7 @@ V2-001 — Backend API Authentication (Completed on July 12, 2026)
 V2-002 — Production Database Safety (Completed on July 12, 2026)
 V2-003 — Trading Rule Alignment (Completed on July 12, 2026)
 V2-004 — Independent Trade Management Worker (Completed on July 12, 2026)
-V2-005 — Position Sizing and Margin Validation
+V2-005 — Position Sizing and Margin Validation (Completed on July 12, 2026)
 V2-006 — Distributed Lock and Idempotency
 V2-007 — Exchange Reconciliation Rewrite
 V2-008 — Scanner Error Reporting
