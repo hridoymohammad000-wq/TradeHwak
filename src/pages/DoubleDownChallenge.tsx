@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Pause, Play, RotateCcw, ShieldAlert, Wallet } from 'lucide-react';
+import { apiRequest } from '../api/client';
 
 type ChallengeSnapshot = {
   config: {
@@ -28,21 +29,6 @@ type ChallengeSnapshot = {
 
 const money = (value: string | number) => `${Number(value).toFixed(2)} USDT`;
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  headers.set('Content-Type', 'application/json');
-  const response = await fetch(`/api${path}`, {
-    ...init,
-    credentials: 'include',
-    headers,
-  });
-  if (!response.ok) {
-    const payload: { detail?: string } = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || `Request failed (${response.status})`);
-  }
-  return response.json() as Promise<T>;
-}
-
 export default function DoubleDownChallenge() {
   const [startingBalance, setStartingBalance] = useState(100);
   const [failureFloor, setFailureFloor] = useState(20);
@@ -51,7 +37,7 @@ export default function DoubleDownChallenge() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void api<ChallengeSnapshot[]>('/challenge')
+    void apiRequest<ChallengeSnapshot[]>('/api/challenge', { method: 'GET' })
       .then((items) => setSnapshot(items[0] || null))
       .catch((reason) => setError(reason instanceof Error ? reason.message : 'Failed to load challenge'));
   }, []);
@@ -69,9 +55,9 @@ export default function DoubleDownChallenge() {
     setBusy(true);
     setError(null);
     try {
-      const created = await api<ChallengeSnapshot>('/challenge', {
+      const created = await apiRequest<ChallengeSnapshot>('/api/challenge', {
         method: 'POST',
-        body: JSON.stringify({ starting_balance: startingBalance, failure_floor: failureFloor }),
+        body: { starting_balance: startingBalance, failure_floor: failureFloor },
       });
       setSnapshot(created);
     } catch (reason) {
@@ -86,7 +72,7 @@ export default function DoubleDownChallenge() {
     setBusy(true);
     setError(null);
     try {
-      const updated = await api<ChallengeSnapshot>(`/challenge/${snapshot.config.challenge_id}/${name}`, {
+      const updated = await apiRequest<ChallengeSnapshot>(`/api/challenge/${snapshot.config.challenge_id}/${name}`, {
         method: 'POST',
       });
       setSnapshot(updated);

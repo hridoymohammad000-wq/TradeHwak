@@ -503,11 +503,11 @@ TradeHawk V2 will be considered complete only when:
 
 ### Double Down Challenge
 
-- [ ] `V2-026 - Safe API Response Parsing`
+- [x] `V2-026 - Safe API Response Parsing`
   `response.json()` সরাসরি না করে empty/non-JSON response handle করতে হবে; canonical API client ব্যবহার করতে হবে।
-- [ ] `V2-027 - Backend Error Contract Alignment`
+- [x] `V2-027 - Backend Error Contract Alignment`
   Frontend `detail` নয়, backend-এর `message`/`data` envelope সঠিকভাবে parse করবে।
-- [ ] `V2-028 - Challenge Persistence Fail-Closed`
+- [x] `V2-028 - Challenge Persistence Fail-Closed`
   Challenge DB save fail হলে success response দেওয়া যাবে না।
 - [ ] `V2-029 - Challenge Readiness Check`
   `double_down_challenges` table ও challenge persistence `/health` readiness check-এর অংশ করতে হবে।

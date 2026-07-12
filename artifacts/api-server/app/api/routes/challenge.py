@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.schemas.common import ApiResponse
 from app.core.state import challenge_service
 
 
@@ -16,52 +17,66 @@ class ChallengeCreateRequest(BaseModel):
 
 
 @router.post("")
-def create_challenge(payload: ChallengeCreateRequest) -> dict:
+def create_challenge(payload: ChallengeCreateRequest) -> ApiResponse[dict]:
     if payload.failure_floor >= payload.starting_balance:
         raise HTTPException(status_code=422, detail="failure_floor must be below starting_balance")
-    return challenge_service.create(
-        starting_balance=payload.starting_balance,
-        failure_floor=payload.failure_floor,
-    )
+    try:
+        snapshot = challenge_service.create(
+            starting_balance=payload.starting_balance,
+            failure_floor=payload.failure_floor,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return ApiResponse(message="Challenge created successfully.", data=snapshot)
 
 
 @router.get("")
-def list_challenges() -> list[dict]:
-    return challenge_service.list()
+def list_challenges() -> ApiResponse[list[dict]]:
+    try:
+        snapshots = challenge_service.list()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return ApiResponse(message="Challenges fetched successfully.", data=snapshots)
 
 
 @router.get("/{challenge_id}")
-def get_challenge(challenge_id: UUID) -> dict:
+def get_challenge(challenge_id: UUID) -> ApiResponse[dict]:
     try:
-        return challenge_service.get(challenge_id)
+        snapshot = challenge_service.get(challenge_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="challenge not found")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return ApiResponse(message="Challenge fetched successfully.", data=snapshot)
 
 
 @router.post("/{challenge_id}/start")
-def start_challenge(challenge_id: UUID) -> dict:
-    return _action(challenge_id, challenge_service.start)
+def start_challenge(challenge_id: UUID) -> ApiResponse[dict]:
+    return _action(challenge_id, challenge_service.start, "Challenge started successfully.")
 
 
 @router.post("/{challenge_id}/pause")
-def pause_challenge(challenge_id: UUID) -> dict:
-    return _action(challenge_id, challenge_service.pause)
+def pause_challenge(challenge_id: UUID) -> ApiResponse[dict]:
+    return _action(challenge_id, challenge_service.pause, "Challenge paused successfully.")
 
 
 @router.post("/{challenge_id}/resume")
-def resume_challenge(challenge_id: UUID) -> dict:
-    return _action(challenge_id, challenge_service.resume)
+def resume_challenge(challenge_id: UUID) -> ApiResponse[dict]:
+    return _action(challenge_id, challenge_service.resume, "Challenge resumed successfully.")
 
 
 @router.post("/{challenge_id}/terminate")
-def terminate_challenge(challenge_id: UUID) -> dict:
-    return _action(challenge_id, challenge_service.terminate)
+def terminate_challenge(challenge_id: UUID) -> ApiResponse[dict]:
+    return _action(challenge_id, challenge_service.terminate, "Challenge terminated successfully.")
 
 
-def _action(challenge_id: UUID, action) -> dict:
+def _action(challenge_id: UUID, action, message: str) -> ApiResponse[dict]:
     try:
-        return action(challenge_id)
+        snapshot = action(challenge_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="challenge not found")
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return ApiResponse(message=message, data=snapshot)

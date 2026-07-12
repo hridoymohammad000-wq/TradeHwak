@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from copy import deepcopy
 from uuid import UUID
 
 from app.double_down.engine import ChallengeEngine
@@ -20,8 +21,9 @@ class ChallengeService:
             failure_floor=failure_floor,
         )
         engine.mark_ready()
+        snapshot = self._save(engine)
         self._engines[engine.config.challenge_id] = engine
-        return self._save(engine)
+        return snapshot
 
     def get(self, challenge_id: UUID) -> dict:
         return self._get_engine(challenge_id).snapshot()
@@ -38,28 +40,44 @@ class ChallengeService:
 
     def start(self, challenge_id: UUID) -> dict:
         engine = self._get_engine(challenge_id)
+        previous = self._snapshot_copy(engine)
         engine.start()
-        return self._save(engine)
+        return self._save_with_rollback(engine, previous)
 
     def pause(self, challenge_id: UUID) -> dict:
         engine = self._get_engine(challenge_id)
+        previous = self._snapshot_copy(engine)
         engine.pause()
-        return self._save(engine)
+        return self._save_with_rollback(engine, previous)
 
     def resume(self, challenge_id: UUID) -> dict:
         engine = self._get_engine(challenge_id)
+        previous = self._snapshot_copy(engine)
         engine.resume()
-        return self._save(engine)
+        return self._save_with_rollback(engine, previous)
 
     def terminate(self, challenge_id: UUID) -> dict:
         engine = self._get_engine(challenge_id)
+        previous = self._snapshot_copy(engine)
         engine.terminate()
-        return self._save(engine)
+        return self._save_with_rollback(engine, previous)
 
     def _save(self, engine: ChallengeEngine) -> dict:
         snapshot = engine.snapshot()
         self._persistence.save_snapshot(engine.config.challenge_id, snapshot)
         return snapshot
+
+    def _save_with_rollback(
+        self,
+        engine: ChallengeEngine,
+        previous_snapshot: dict,
+    ) -> dict:
+        try:
+            return self._save(engine)
+        except Exception:
+            restored = self._engine_from_snapshot(previous_snapshot)
+            self._engines[engine.config.challenge_id] = restored
+            raise
 
     def _get_engine(self, challenge_id: UUID) -> ChallengeEngine:
         existing = self._engines.get(challenge_id)
@@ -78,3 +96,18 @@ class ChallengeService:
             engine.state.status = ChallengeStatus.PAUSED
         self._engines[challenge_id] = engine
         return engine
+
+    @staticmethod
+    def _snapshot_copy(engine: ChallengeEngine) -> dict:
+        return deepcopy(engine.snapshot())
+
+    @staticmethod
+    def _engine_from_snapshot(snapshot: dict) -> ChallengeEngine:
+        return ChallengeEngine(
+            config=ChallengeConfig.model_validate(snapshot["config"]),
+            state=ChallengeState.model_validate(snapshot["state"]),
+            ledger=[
+                ChallengeLedgerEntry.model_validate(row)
+                for row in snapshot.get("ledger", [])
+            ],
+        )
