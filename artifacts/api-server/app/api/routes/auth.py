@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Cookie, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from app.schemas.auth import AuthenticatedSession, AuthenticatedSessionResponse, LoginRequest
@@ -62,6 +62,12 @@ def _session_response(expiry: int, message: str) -> AuthenticatedSessionResponse
     )
 
 
+def require_authenticated_session(
+    tradehawk_session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+) -> int:
+    return _validate_session(tradehawk_session)
+
+
 @router.post("/login", response_model=AuthenticatedSessionResponse)
 def login(payload: LoginRequest, response: Response) -> AuthenticatedSessionResponse:
     secret = _access_token()
@@ -81,8 +87,7 @@ def login(payload: LoginRequest, response: Response) -> AuthenticatedSessionResp
 
 
 @router.get("/session", response_model=AuthenticatedSessionResponse)
-def session(tradehawk_session: str | None = Cookie(default=None)) -> AuthenticatedSessionResponse:
-    expiry = _validate_session(tradehawk_session)
+def session(expiry: int = Depends(require_authenticated_session)) -> AuthenticatedSessionResponse:
     return _session_response(expiry, "Session valid.")
 
 
