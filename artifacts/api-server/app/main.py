@@ -25,21 +25,43 @@ from app.core.state import (
 SCANNER_INTERVAL_SECONDS = 300
 TRADE_MANAGEMENT_INTERVAL_SECONDS = 15
 EXCHANGE_RECONCILIATION_INTERVAL_SECONDS = 30
+AUTO_TRADE_WORKER_LOCK = "tradehawk:worker:auto_trade"
+TRADE_MANAGEMENT_WORKER_LOCK = "tradehawk:worker:trade_management"
+EXCHANGE_RECONCILIATION_WORKER_LOCK = "tradehawk:worker:exchange_reconciliation"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_DIST = REPOSITORY_ROOT / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+
+
+def _run_with_worker_leader_lock(lock_name: str, operation):
+    locker = getattr(persistence_repository, "try_advisory_lock", None)
+    unlocker = getattr(persistence_repository, "advisory_unlock", None)
+    if not callable(locker) or not callable(unlocker):
+        return operation()
+    acquired = locker(lock_name)
+    if not acquired:
+        return {"status": "leader_not_acquired"}
+    try:
+        return operation()
+    finally:
+        unlocker(lock_name)
 
 
 async def _run_logged_worker(
     *,
     event_type: str,
     failure_event_type: str,
+    leader_lock_name: str,
     operation,
     sleep_seconds: int,
 ) -> None:
     while True:
         try:
-            result = await asyncio.to_thread(operation)
+            result = await asyncio.to_thread(
+                _run_with_worker_leader_lock,
+                leader_lock_name,
+                operation,
+            )
             persistence_repository.append_log("execution_logs", event_type, result)
         except Exception as exc:
             persistence_repository.append_log(
@@ -54,6 +76,7 @@ async def _auto_trade_loop() -> None:
     await _run_logged_worker(
         event_type="auto_trade_cycle",
         failure_event_type="auto_trade_cycle_failed",
+        leader_lock_name=AUTO_TRADE_WORKER_LOCK,
         operation=auto_trade_service.run_cycle,
         sleep_seconds=SCANNER_INTERVAL_SECONDS,
     )
@@ -63,6 +86,7 @@ async def _trade_management_loop() -> None:
     await _run_logged_worker(
         event_type="trade_management_cycle",
         failure_event_type="trade_management_cycle_failed",
+        leader_lock_name=TRADE_MANAGEMENT_WORKER_LOCK,
         operation=trade_management_service.manage_open_trades,
         sleep_seconds=TRADE_MANAGEMENT_INTERVAL_SECONDS,
     )
@@ -81,17 +105,31 @@ async def _exchange_reconciliation_loop() -> None:
     await _run_logged_worker(
         event_type="exchange_reconciliation_cycle",
         failure_event_type="exchange_reconciliation_cycle_failed",
+        leader_lock_name=EXCHANGE_RECONCILIATION_WORKER_LOCK,
         operation=_reconcile_exchange_state,
         sleep_seconds=EXCHANGE_RECONCILIATION_INTERVAL_SECONDS,
     )
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    persistence_repository.initialize()
+def _initialize_runtime_state() -> None:
+    if persistence_repository.database_url:
+        initialized = persistence_repository.initialize()
+        if not initialized:
+            raise RuntimeError(
+                persistence_repository.last_error
+                or "Database initialization failed."
+            )
+        ready, reason = persistence_repository.verify_execution_ready()
+        if not ready:
+            raise RuntimeError(reason or "Database readiness verification failed.")
     settings_service.reload_from_persistence()
     trade_service.reload_from_persistence()
     profit_tracking_service.reload_from_persistence()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    _initialize_runtime_state()
     tasks = [
         asyncio.create_task(_auto_trade_loop()),
         asyncio.create_task(_trade_management_loop()),

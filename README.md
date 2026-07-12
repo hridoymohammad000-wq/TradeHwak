@@ -463,6 +463,85 @@ TradeHawk V2 will be considered complete only when:
 
 ---
 
+## TradeHawk V2 - Remaining Fix Checklist
+
+### Critical
+
+- [x] `V2-011 - Distributed Lock Repair`
+  একই PostgreSQL connection পুরো auto-trade cycle পর্যন্ত ধরে রাখতে হবে। বর্তমান advisory lock connection close হলেই release হয়ে যায়।
+- [x] `V2-012 - Database Fail-Closed Persistence`
+  Trade, settings, journal, signal ID বা challenge save ব্যর্থ হলে exception দিতে হবে; silently ignore করা যাবে না।
+- [x] `V2-013 - Startup Database Safety`
+  Migration/database initialization fail হলে background workers start হবে না।
+- [x] `V2-014 - Multi-Worker Coordination`
+  Scanner, trade manager ও reconciliation-এর জন্য shared leader-lock/coordination যোগ করতে হবে।
+- [x] `V2-015 - Exchange Reconciliation Idempotency`
+  Symbol নয় - `orderId`, `execId`, `positionIdx` ও stable trade identity দিয়ে matching করতে হবে; duplicate journal/P&L বন্ধ করতে হবে।
+- [x] `V2-016 - Imported Trade Mode Preservation`
+  Exchange trade-কে current selected mode দিয়ে label না করে original scalping/intraday mode restore করতে হবে।
+- [ ] `V2-017 - SL/TP Confirmation and Emergency Close`
+  Entry-এর পরে SL/TP exchange-এ সত্যিই attached হয়েছে কি না verify করতে হবে; দুইবার failure হলে reduce-only emergency close করতে হবে।
+- [x] `V2-018 - Atomic TP1/TP2 Management`
+  Partial exit fill confirm হওয়ার আগে `tp1_done`/`tp2_done` set করা যাবে না; retry-safe state machine করতে হবে।
+
+### Trading Engine
+
+- [ ] `V2-019 - Rank Before Execute`
+  সব symbol evaluate -> score অনুযায়ী rank -> best signals select -> তারপর order execute করতে হবে।
+- [ ] `V2-020 - Auto Scanner Error Reporting`
+  Automatic cycle-এও `rejected`, `failed`, `exchange_error` ও `insufficient_data` আলাদা report করতে হবে।
+- [ ] `V2-021 - Signal Identity Redesign`
+  Signal ID-তে candle timestamp/setup identity যোগ করতে হবে; একই symbol-direction-এর valid নতুন signal যেন পুরো দিন block না হয়।
+- [ ] `V2-022 - OrderLinkId Collision Prevention`
+  Manual ও automatic orders-এর unique deterministic order identity নিশ্চিত করতে হবে।
+- [ ] `V2-023 - Spread and Liquidity Gate`
+  Bid-ask spread বেশি হলে symbol skip করতে হবে; minimum liquidity/slippage rule যোগ করতে হবে।
+- [ ] `V2-024 - Fresh Price for Trade Management`
+  15-second trade manager-কে stale reconciliation price নয়, fresh ticker/position price ব্যবহার করতে হবে।
+- [ ] `V2-025 - Single Risk Authority`
+  Fixed V2 scalping/intraday rules এবং editable Control Center risk fields-এর conflict সরাতে হবে।
+
+### Double Down Challenge
+
+- [ ] `V2-026 - Safe API Response Parsing`
+  `response.json()` সরাসরি না করে empty/non-JSON response handle করতে হবে; canonical API client ব্যবহার করতে হবে।
+- [ ] `V2-027 - Backend Error Contract Alignment`
+  Frontend `detail` নয়, backend-এর `message`/`data` envelope সঠিকভাবে parse করবে।
+- [ ] `V2-028 - Challenge Persistence Fail-Closed`
+  Challenge DB save fail হলে success response দেওয়া যাবে না।
+- [ ] `V2-029 - Challenge Readiness Check`
+  `double_down_challenges` table ও challenge persistence `/health` readiness check-এর অংশ করতে হবে।
+- [ ] `V2-030 - Complete Challenge Execution Wiring`
+  Cycle planning, strategy selection, demo order execution, protection, reconciliation ও P&L close API/service-এর সঙ্গে connect করতে হবে।
+- [ ] `V2-031 - Multiple Challenge Management`
+  Challenge list/selector এবং active challenge নির্বাচন ব্যবস্থা যোগ করতে হবে।
+
+### Production And Verification
+
+- [ ] `V2-032 - Real Health/Readiness Endpoint`
+  Database/Bybit/worker/table failure হলে HTTP `503` দিতে হবে; শুধু body-তে `degraded` যথেষ্ট নয়।
+- [ ] `V2-033 - CSRF and Login Hardening`
+  Mutation routes-এ CSRF/origin validation, login rate limit ও failed-attempt protection যোগ করতে হবে।
+- [ ] `V2-034 - Deployment Portability`
+  Hardcoded Render URL সরিয়ে environment-based configuration করতে হবে।
+- [ ] `V2-035 - Migration Versioning`
+  একক `001_init.sql` বদলে versioned migrations ও migration history যোগ করতে হবে।
+- [ ] `V2-036 - Database Pooling and Log Retention`
+  PostgreSQL connection pool এবং execution-log cleanup/retention policy যোগ করতে হবে।
+- [ ] `V2-037 - Full Runtime Test Evidence`
+  Real PostgreSQL integration, multi-worker collision, restart recovery, Bybit Demo smoke test এবং browser E2E test চালাতে হবে।
+- [ ] `V2-038 - README Status Correction`
+  Runtime evidence ছাড়া V2 task "Completed" লেখা যাবে না; বর্তমান checklist status evidence অনুযায়ী update করতে হবে।
+
+### Fix Order
+
+**প্রথমে:** `V2-011 -> V2-018`  
+**তারপর:** `V2-019 -> V2-025`  
+**এরপর:** `V2-026 -> V2-031`  
+**শেষে:** `V2-032 -> V2-038`
+
+---
+
 ## Security
 
 Never commit these values to the repository:

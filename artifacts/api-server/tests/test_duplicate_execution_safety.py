@@ -10,8 +10,10 @@ class LockingRepository:
     def __init__(self, acquired=True):
         self.acquired = acquired
         self.unlock_calls = 0
+        self.lock_calls = 0
 
     def try_advisory_lock(self, name):
+        self.lock_calls += 1
         return self.acquired
 
     def advisory_unlock(self, name):
@@ -29,6 +31,7 @@ class DuplicateExecutionSafetyTests(unittest.TestCase):
         result = service.run_cycle()
 
         self.assertEqual(result, {"status": "already_running", "opened": 0})
+        self.assertEqual(repository.lock_calls, 1)
         self.assertEqual(repository.unlock_calls, 0)
 
     def test_distributed_cycle_lock_is_released_after_successful_cycle(self):
@@ -41,6 +44,24 @@ class DuplicateExecutionSafetyTests(unittest.TestCase):
         result = service.run_cycle()
 
         self.assertEqual(result, {"status": "executed", "opened": 1})
+        self.assertEqual(repository.lock_calls, 1)
+        self.assertEqual(repository.unlock_calls, 1)
+
+    def test_distributed_cycle_lock_is_released_after_cycle_failure(self):
+        repository = LockingRepository(acquired=True)
+        service = AutoTradeService.__new__(AutoTradeService)
+        service._repository = repository
+        service._cycle_lock = Lock()
+
+        def boom():
+            raise RuntimeError("cycle failed")
+
+        service._run_cycle = boom
+
+        with self.assertRaises(RuntimeError):
+            service.run_cycle()
+
+        self.assertEqual(repository.lock_calls, 1)
         self.assertEqual(repository.unlock_calls, 1)
 
     def test_order_link_id_reuses_signal_identity_for_idempotency(self):

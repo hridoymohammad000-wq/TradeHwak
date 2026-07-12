@@ -13,7 +13,7 @@ class ChallengePersistence:
         self._repository = repository
 
     def save_snapshot(self, challenge_id: UUID, snapshot: dict[str, Any]) -> None:
-        self._repository._execute(
+        self._repository.execute_required(
             """
             INSERT INTO double_down_challenges (challenge_id, snapshot, updated_at)
             VALUES (%s, %s::jsonb, now())

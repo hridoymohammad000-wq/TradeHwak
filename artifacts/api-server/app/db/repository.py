@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import zlib
+from contextlib import suppress
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ class PersistenceRepository:
         self.database_url = (database_url or "").strip()
         self.enabled = bool(self.database_url and psycopg is not None)
         self.last_error: str | None = None
+        self._advisory_lock_connections: dict[str, Any] = {}
         if self.database_url and psycopg is None:
             self.last_error = "DATABASE_URL is set but psycopg is not installed."
             logger.warning(self.last_error)
@@ -91,7 +93,7 @@ class PersistenceRepository:
         return self._json_value(row.get("settings")) if row else None
 
     def save_settings(self, settings: dict[str, Any]) -> None:
-        self._execute("""
+        self._execute_required("""
             INSERT INTO bot_settings (id, settings, updated_at)
             VALUES (1, %s::jsonb, now())
             ON CONFLICT (id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()
@@ -106,7 +108,7 @@ class PersistenceRepository:
         return active, closed
 
     def upsert_trade(self, trade_key: str, status: str, payload: dict[str, Any]) -> None:
-        self._execute("""
+        self._execute_required("""
             INSERT INTO trade_history (trade_key, status, payload, updated_at)
             VALUES (%s, %s, %s::jsonb, now())
             ON CONFLICT (trade_key) DO UPDATE
@@ -114,7 +116,7 @@ class PersistenceRepository:
         """, (trade_key, status, self._json(payload)))
 
     def save_journal_entry(self, trade_key: str, payload: dict[str, Any]) -> None:
-        self._execute("""
+        self._execute_required("""
             INSERT INTO journal (trade_key, payload, created_at)
             VALUES (%s, %s::jsonb, now())
             ON CONFLICT (trade_key) DO UPDATE SET payload = EXCLUDED.payload
@@ -125,7 +127,7 @@ class PersistenceRepository:
         return {str(row["signal_id"]) for row in rows}
 
     def save_executed_signal_id(self, signal_id: str, trade_day: date) -> None:
-        self._execute("""
+        self._execute_required("""
             INSERT INTO executed_signal_ids (signal_id, trade_day)
             VALUES (%s, %s)
             ON CONFLICT (signal_id, trade_day) DO NOTHING
@@ -136,7 +138,7 @@ class PersistenceRepository:
         return self._json_value(row.get("state")) if row else None
 
     def save_profit_tracking_state(self, state: dict[str, Any]) -> None:
-        self._execute("""
+        self._execute_required("""
             INSERT INTO profit_tracking_state (id, state, updated_at)
             VALUES (1, %s::jsonb, now())
             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
@@ -147,7 +149,7 @@ class PersistenceRepository:
         return self._json_value(row.get("state")) if row else None
 
     def save_trade_management_state(self, state: dict[str, Any]) -> None:
-        self._execute("""
+        self._execute_required("""
             INSERT INTO trade_management_state (id, state, updated_at)
             VALUES (1, %s::jsonb, now())
             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
@@ -158,11 +160,14 @@ class PersistenceRepository:
         return self._json_value(row.get("state")) if row else None
 
     def save_workflow_state(self, state: dict[str, Any]) -> None:
-        self._execute("""
+        self._execute_required("""
             INSERT INTO workflow_state (id, state, updated_at)
             VALUES (1, %s::jsonb, now())
             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()
         """, (self._json(state),))
+
+    def execute_required(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        self._execute_required(sql, params)
 
     def append_log(self, table: str, event_type: str, payload: dict[str, Any]) -> None:
         allowed = {"scan_logs", "signal_logs", "execution_logs"}
@@ -173,16 +178,50 @@ class PersistenceRepository:
     def try_advisory_lock(self, name: str) -> bool:
         if not self.enabled:
             return True
+        if name in self._advisory_lock_connections:
+            return True
         key = self._advisory_lock_key(name)
-        row = self._fetchone("SELECT pg_try_advisory_lock(%s) AS acquired", (key,))
-        return bool(row and row.get("acquired"))
+        connection = None
+        try:
+            connection = self._connect()
+            row = connection.execute(
+                "SELECT pg_try_advisory_lock(%s) AS acquired",
+                (key,),
+            ).fetchone()
+            acquired = bool(row and row.get("acquired"))
+            if acquired:
+                self._advisory_lock_connections[name] = connection
+                self.last_error = None
+                return True
+            connection.close()
+            return False
+        except Exception as exc:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.close()
+            self._handle_error("Advisory lock acquisition failed", exc)
+            return False
 
     def advisory_unlock(self, name: str) -> bool:
         if not self.enabled:
             return True
         key = self._advisory_lock_key(name)
-        row = self._fetchone("SELECT pg_advisory_unlock(%s) AS released", (key,))
-        return bool(row and row.get("released"))
+        connection = self._advisory_lock_connections.pop(name, None)
+        if connection is None:
+            return False
+        try:
+            row = connection.execute(
+                "SELECT pg_advisory_unlock(%s) AS released",
+                (key,),
+            ).fetchone()
+            self.last_error = None
+            return bool(row and row.get("released"))
+        except Exception as exc:
+            self._handle_error("Advisory lock release failed", exc)
+            return False
+        finally:
+            with suppress(Exception):
+                connection.close()
 
     def _connect(self):
         if not self.enabled or psycopg is None:
@@ -198,6 +237,18 @@ class PersistenceRepository:
             self.last_error = None
         except Exception as exc:
             self._handle_error("Database write failed", exc)
+
+    def _execute_required(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        if not self.enabled:
+            reason = self.last_error or "Database persistence is disabled."
+            raise RuntimeError(reason)
+        try:
+            with self._connect() as connection:
+                connection.execute(sql, params)
+            self.last_error = None
+        except Exception as exc:
+            self._handle_error("Database write failed", exc)
+            raise RuntimeError(self.last_error) from exc
 
     def _fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
         if not self.enabled:

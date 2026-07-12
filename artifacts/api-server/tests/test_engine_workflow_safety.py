@@ -199,7 +199,11 @@ class BackgroundCycleSafetyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await main._auto_trade_loop()
 
-        to_thread.assert_awaited_once_with(main.auto_trade_service.run_cycle)
+        to_thread.assert_awaited_once_with(
+            main._run_with_worker_leader_lock,
+            main.AUTO_TRADE_WORKER_LOCK,
+            main.auto_trade_service.run_cycle,
+        )
 
     async def test_trade_management_loop_is_offloaded_from_event_loop(self):
         result = {"skipped": 1}
@@ -214,7 +218,11 @@ class BackgroundCycleSafetyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await main._trade_management_loop()
 
-        to_thread.assert_awaited_once_with(main.trade_management_service.manage_open_trades)
+        to_thread.assert_awaited_once_with(
+            main._run_with_worker_leader_lock,
+            main.TRADE_MANAGEMENT_WORKER_LOCK,
+            main.trade_management_service.manage_open_trades,
+        )
 
     async def test_exchange_reconciliation_loop_is_offloaded_from_event_loop(self):
         result = {"status": "reconciled", "total_open_trades": 1}
@@ -229,7 +237,11 @@ class BackgroundCycleSafetyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await main._exchange_reconciliation_loop()
 
-        to_thread.assert_awaited_once_with(main._reconcile_exchange_state)
+        to_thread.assert_awaited_once_with(
+            main._run_with_worker_leader_lock,
+            main.EXCHANGE_RECONCILIATION_WORKER_LOCK,
+            main._reconcile_exchange_state,
+        )
 
     def test_reconcile_exchange_state_returns_summary(self):
         reconciliation = ReconciliationSpy()
@@ -242,6 +254,32 @@ class BackgroundCycleSafetyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(reconciliation.calls, 1)
         self.assertEqual(result, {"status": "reconciled", "total_open_trades": 1})
+
+    def test_worker_leader_lock_skips_when_another_instance_is_active(self):
+        with (
+            patch.object(main.persistence_repository, "try_advisory_lock", return_value=False),
+            patch.object(main.persistence_repository, "advisory_unlock") as unlock,
+        ):
+            result = main._run_with_worker_leader_lock(
+                main.AUTO_TRADE_WORKER_LOCK,
+                lambda: self.fail("operation should not run without leader lock"),
+            )
+
+        self.assertEqual(result, {"status": "leader_not_acquired"})
+        unlock.assert_not_called()
+
+    def test_worker_leader_lock_releases_after_operation(self):
+        with (
+            patch.object(main.persistence_repository, "try_advisory_lock", return_value=True),
+            patch.object(main.persistence_repository, "advisory_unlock") as unlock,
+        ):
+            result = main._run_with_worker_leader_lock(
+                main.TRADE_MANAGEMENT_WORKER_LOCK,
+                lambda: {"status": "ok"},
+            )
+
+        self.assertEqual(result, {"status": "ok"})
+        unlock.assert_called_once_with(main.TRADE_MANAGEMENT_WORKER_LOCK)
 
 
 if __name__ == "__main__":

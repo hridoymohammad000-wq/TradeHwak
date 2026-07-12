@@ -34,6 +34,7 @@ class ClosedTradeRecord(BaseModel):
     symbol: str
     mode: TradingMode
     direction: Direction
+    external_id: str | None = None
     qty: str | None = None
     entry_price: float | None = None
     exit_price: float | None = None

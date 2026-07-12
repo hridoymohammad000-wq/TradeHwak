@@ -42,7 +42,7 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         stops = []
         service._submit_partial_close = lambda trade, qty, stage, key: submitted.append(
             (stage, qty)
-        )
+        ) or "tp1-order"
         service._tighten_stop = lambda trade, stop: stops.append(stop)
         service._persist = lambda: None
         trade = SimpleNamespace(
@@ -58,9 +58,10 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
 
         outcome = service._manage_trade(trade)
 
-        self.assertEqual(outcome, "tp1")
+        self.assertEqual(outcome, "pending")
         self.assertEqual(submitted, [("tp1", Decimal("0.50"))])
-        self.assertEqual(stops, [Decimal("100")])
+        self.assertEqual(stops, [])
+        self.assertEqual(service._state["BTCUSDT:2099-07-11T00:00:00+00:00"]["pending_stage"], "tp1")
 
     def test_tp2_triggers_at_two_r_after_tp1_with_reduced_quantity(self):
         service = TradeManagementService.__new__(TradeManagementService)
@@ -80,7 +81,7 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
         stops = []
         service._submit_partial_close = lambda trade, qty, stage, trade_key: submitted.append(
             (stage, qty)
-        )
+        ) or "tp2-order"
         service._tighten_stop = lambda trade, stop: stops.append(stop)
         service._persist = lambda: None
         trade = SimpleNamespace(
@@ -96,9 +97,47 @@ class StepFourStrategyTradeManagementTests(unittest.TestCase):
 
         outcome = service._manage_trade(trade)
 
-        self.assertEqual(outcome, "tp2")
+        self.assertEqual(outcome, "pending")
         self.assertEqual(submitted, [("tp2", Decimal("0.30"))])
-        self.assertEqual(stops, [Decimal("160.0")])
+        self.assertEqual(stops, [])
+
+    def test_pending_tp1_is_confirmed_before_state_is_marked_done(self):
+        service = TradeManagementService.__new__(TradeManagementService)
+        key = "BTCUSDT:2099-07-11T00:00:00+00:00"
+        service._state = {
+            key: {
+                "symbol": "BTCUSDT",
+                "opened_at": "2099-07-11T00:00:00+00:00",
+                "original_qty": "1",
+                "tp1_done": False,
+                "tp2_done": False,
+                "last_stop": 60.0,
+                "pending_stage": "tp1",
+                "pending_order_id": "tp1-order",
+                "pending_expected_qty": "0.50",
+            }
+        }
+        service._repository = None
+        stops = []
+        service._tighten_stop = lambda trade, stop: stops.append(stop)
+        service._persist = lambda: None
+        trade = SimpleNamespace(
+            symbol="BTCUSDT",
+            opened_at="2099-07-11T00:00:00+00:00",
+            direction=Direction.BUY,
+            entry_price=100,
+            current_price=160,
+            stop_loss=60,
+            qty="0.5",
+            planned_risk_usdt=40,
+        )
+
+        outcome = service._manage_trade(trade)
+
+        self.assertEqual(outcome, "tp1")
+        self.assertEqual(stops, [Decimal("100")])
+        self.assertTrue(service._state[key]["tp1_done"])
+        self.assertNotIn("pending_stage", service._state[key])
 
     def test_stop_never_loosens(self):
         self.assertTrue(

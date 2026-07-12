@@ -36,6 +36,7 @@ class ManagedTrade:
     planned_risk_usdt: float | None = None
     risk_reward: float | None = None
     order_id: str | None = None
+    exchange_position_id: str | None = None
     signal_id: str | None = None
     opened_at: str | None = None
     synced_with_exchange: bool = False
@@ -90,10 +91,25 @@ class TradeService:
     @staticmethod
     def _trade_key(trade: ManagedTrade) -> str:
         return (
-            trade.order_id
+            trade.exchange_position_id
+            or trade.order_id
             or trade.signal_id
             or f"{trade.symbol}:{trade.mode.value}:{trade.opened_at or 'unknown'}"
         )
+
+    @staticmethod
+    def _trade_identity_candidates(trade: ManagedTrade) -> list[str]:
+        candidates = [
+            trade.exchange_position_id,
+            trade.order_id
+            or trade.signal_id
+            or f"{trade.symbol}:{trade.mode.value}:{trade.opened_at or 'unknown'}"
+        ]
+        if trade.order_id:
+            candidates.append(trade.order_id)
+        if trade.signal_id:
+            candidates.append(trade.signal_id)
+        return [candidate for candidate in candidates if candidate]
 
     def _persist_active_trade(self, trade: ManagedTrade) -> None:
         if self._repository is None:
@@ -250,15 +266,12 @@ class TradeService:
                 self._persist_active_trade(trade)
                 continue
 
-            candidates = closed_by_symbol.get(symbol, [])
-            closed_trade = next(
-                (
-                    row
-                    for row in candidates
-                    if self._closed_trade_key(row) not in consumed_closed_keys
-                ),
-                None,
-            )
+            candidates = [
+                row
+                for row in closed_by_symbol.get(symbol, [])
+                if self._closed_trade_key(row) not in consumed_closed_keys
+            ]
+            closed_trade = self._select_matching_closed_trade(trade, candidates)
             if closed_trade is not None:
                 consumed_closed_keys.add(self._closed_trade_key(closed_trade))
                 closed_record = self._to_closed_record(trade, closed_trade)
@@ -454,11 +467,17 @@ class TradeService:
         opened_at = self._to_iso_time(
             position.get("createdTime") or position.get("updatedTime")
         )
-        order_id = str(position.get("positionIdx") or "")
-        synthetic_key = f"exchange:{symbol}:{opened_at or 'open'}:{order_id}"
+        position_identity = self._position_identity(position)
+        restored_mode = self._restore_trade_mode(
+            symbol=symbol,
+            opened_at=opened_at,
+            direction=direction,
+            entry_price=entry,
+            default_mode=selected_mode,
+        )
         return ManagedTrade(
             symbol=symbol,
-            mode=selected_mode,
+            mode=restored_mode,
             direction=direction,
             entry_price=entry,
             current_price=current,
@@ -471,7 +490,8 @@ class TradeService:
             notional=notional,
             planned_risk_usdt=planned_risk,
             risk_reward=risk_reward,
-            order_id=synthetic_key,
+            exchange_position_id=position_identity,
+            order_id=position_identity,
             opened_at=opened_at,
             synced_with_exchange=True,
         )
@@ -496,6 +516,7 @@ class TradeService:
             symbol=trade.symbol,
             mode=trade.mode,
             direction=trade.direction,
+            external_id=self._closed_trade_key(closed_trade),
             qty=trade.qty,
             entry_price=trade.entry_price,
             exit_price=exit_price,
@@ -516,9 +537,15 @@ class TradeService:
 
     def _closed_record_exists(self, candidate: ClosedTradeRecord) -> bool:
         return any(
-            record.symbol == candidate.symbol
-            and record.closed_time == candidate.closed_time
-            and record.realized_pnl == candidate.realized_pnl
+            (
+                candidate.external_id is not None
+                and record.external_id == candidate.external_id
+            )
+            or (
+                record.symbol == candidate.symbol
+                and record.closed_time == candidate.closed_time
+                and record.realized_pnl == candidate.realized_pnl
+            )
             for record in self._closed_trades
         )
 
@@ -539,9 +566,11 @@ class TradeService:
     def _closed_trade_key(row: dict) -> str:
         order_id = str(row.get("orderId") or row.get("execId") or "").strip()
         symbol = str(row.get("symbol") or "UNKNOWN").upper()
+        position_idx = str(row.get("positionIdx") or "0").strip()
         updated = str(row.get("updatedTime") or row.get("createdTime") or "unknown")
         pnl = str(row.get("closedPnl") or "0")
-        return f"exchange-closed:{order_id or f'{symbol}:{updated}:{pnl}'}"
+        side = str(row.get("side") or "unknown").lower()
+        return f"exchange-closed:{order_id or f'{symbol}:{side}:{position_idx}:{updated}:{pnl}'}"
 
     def _managed_from_closed_row(
         self,
@@ -556,9 +585,16 @@ class TradeService:
         qty = str(row.get("qty") or row.get("closedSize") or "") or None
         qty_float = self._safe_float(qty, 0.0)
         opened_at = self._to_iso_time(row.get("createdTime"))
+        restored_mode = self._restore_trade_mode(
+            symbol=symbol,
+            opened_at=opened_at,
+            direction=direction,
+            entry_price=entry,
+            default_mode=selected_mode,
+        )
         return ManagedTrade(
             symbol=symbol,
-            mode=selected_mode,
+            mode=restored_mode,
             direction=direction,
             entry_price=entry,
             current_price=exit_price,
@@ -571,10 +607,111 @@ class TradeService:
             notional=qty_float * entry if qty_float > 0 and entry > 0 else None,
             planned_risk_usdt=None,
             risk_reward=None,
+            exchange_position_id=self._closed_trade_key(row),
             order_id=self._closed_trade_key(row),
             opened_at=opened_at,
             synced_with_exchange=True,
         )
+
+    def _select_matching_closed_trade(
+        self,
+        trade: ManagedTrade,
+        candidates: list[dict],
+    ) -> dict | None:
+        if not candidates:
+            return None
+        identity_candidates = set(self._trade_identity_candidates(trade))
+        for row in candidates:
+            row_order_id = str(row.get("orderId") or row.get("execId") or "").strip()
+            if row_order_id and row_order_id in identity_candidates:
+                return row
+
+        scored: list[tuple[int, int, dict]] = []
+        for row in candidates:
+            score = 0
+            row_direction = self._direction_from_closed_row(row)
+            if row_direction == trade.direction:
+                score += 4
+            try:
+                if trade.qty and float(row.get("qty") or row.get("closedSize") or 0) == float(trade.qty):
+                    score += 2
+            except (TypeError, ValueError):
+                pass
+            if abs(
+                self._safe_float(row.get("avgEntryPrice") or row.get("entryPrice"), trade.entry_price)
+                - trade.entry_price
+            ) <= max(abs(trade.entry_price) * 0.002, 0.0005):
+                score += 2
+            timestamp = int(str(row.get("updatedTime") or row.get("createdTime") or 0))
+            scored.append((score, timestamp, row))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return scored[0][2] if scored and scored[0][0] > 0 else None
+
+    def _restore_trade_mode(
+        self,
+        *,
+        symbol: str,
+        opened_at: str | None,
+        direction: Direction,
+        entry_price: float,
+        default_mode: TradingMode,
+    ) -> TradingMode:
+        candidates: list[tuple[int, TradingMode]] = []
+        opened_ts = self._timestamp_from_iso(opened_at)
+        for trade in self._active_trades:
+            if trade.symbol != symbol:
+                continue
+            score = 0
+            if trade.direction == direction:
+                score += 3
+            if trade.opened_at and opened_ts is not None:
+                delta = abs((self._timestamp_from_iso(trade.opened_at) or opened_ts) - opened_ts)
+                if delta <= 3600:
+                    score += 3
+            if abs((trade.entry_price or 0.0) - entry_price) <= max(abs(entry_price) * 0.002, 0.0005):
+                score += 2
+            candidates.append((score, trade.mode))
+        for trade in self._closed_trades:
+            if trade.symbol != symbol:
+                continue
+            score = 0
+            if trade.direction == direction:
+                score += 3
+            if trade.opened_at and opened_ts is not None:
+                delta = abs((self._timestamp_from_iso(trade.opened_at) or opened_ts) - opened_ts)
+                if delta <= 3600:
+                    score += 3
+            if abs((float(trade.entry_price or 0.0)) - entry_price) <= max(abs(entry_price) * 0.002, 0.0005):
+                score += 2
+            candidates.append((score, trade.mode))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1] if candidates and candidates[0][0] > 0 else default_mode
+
+    @staticmethod
+    def _position_identity(position: dict) -> str:
+        symbol = str(position.get("symbol") or "UNKNOWN").upper()
+        position_idx = str(position.get("positionIdx") or "0").strip()
+        opened_at = TradeService._to_iso_time(
+            position.get("createdTime") or position.get("updatedTime")
+        ) or "open"
+        return f"exchange-open:{symbol}:{position_idx}:{opened_at}"
+
+    @staticmethod
+    def _direction_from_closed_row(row: dict) -> Direction:
+        side = str(row.get("side") or "").lower()
+        return Direction.BUY if side == "sell" else Direction.SELL
+
+    @staticmethod
+    def _timestamp_from_iso(value: str | None) -> int | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
 
     @staticmethod
     def _to_iso_time(value) -> str | None:

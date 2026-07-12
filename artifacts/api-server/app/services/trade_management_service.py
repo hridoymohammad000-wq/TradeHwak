@@ -47,6 +47,7 @@ class TradeManagementService:
         result = {
             "tp1": 0,
             "tp2": 0,
+            "pending": 0,
             "trailed": 0,
             "duration_closed": 0,
             "skipped": 0,
@@ -88,6 +89,16 @@ class TradeManagementService:
         if risk <= 0 or original_qty <= 0:
             return "skipped"
 
+        pending_outcome = self._resolve_pending_partial_exit(
+            trade=trade,
+            state=state,
+            entry=entry,
+            risk=risk,
+        )
+        if pending_outcome is not None:
+            self._persist()
+            return pending_outcome
+
         if self._duration_expired(trade):
             self._submit_partial_close(trade, Decimal(str(trade.qty)), "duration", key)
             self._persist()
@@ -97,25 +108,28 @@ class TradeManagementService:
         r_multiple = self._r_multiple(trade.direction, entry, current, risk)
 
         if r_multiple >= tp1_r and not state.get("tp1_done"):
-            self._submit_partial_close(trade, original_qty * Decimal("0.50"), "tp1", key)
-            self._tighten_stop(trade, entry)
-            state["tp1_done"] = True
-            state["last_stop"] = float(entry)
+            self._queue_partial_exit(
+                trade=trade,
+                state=state,
+                key=key,
+                stage="tp1",
+                requested_qty=original_qty * Decimal("0.50"),
+                expected_remaining_qty=original_qty * Decimal("0.50"),
+            )
             self._persist()
-            return "tp1"
+            return "pending"
 
         if r_multiple >= tp2_r and state.get("tp1_done") and not state.get("tp2_done"):
-            self._submit_partial_close(trade, original_qty * Decimal("0.30"), "tp2", key)
-            tp1_price = (
-                entry + risk * tp1_r
-                if trade.direction == Direction.BUY
-                else entry - risk * tp1_r
+            self._queue_partial_exit(
+                trade=trade,
+                state=state,
+                key=key,
+                stage="tp2",
+                requested_qty=original_qty * Decimal("0.30"),
+                expected_remaining_qty=original_qty * Decimal("0.20"),
             )
-            self._tighten_stop(trade, tp1_price)
-            state["tp2_done"] = True
-            state["last_stop"] = float(tp1_price)
             self._persist()
-            return "tp2"
+            return "pending"
 
         if (
             state.get("tp2_done")
@@ -129,6 +143,54 @@ class TradeManagementService:
                 self._persist()
                 return "trailed"
         return "skipped"
+
+    def _queue_partial_exit(
+        self,
+        *,
+        trade,
+        state: dict,
+        key: str,
+        stage: str,
+        requested_qty: Decimal,
+        expected_remaining_qty: Decimal,
+    ) -> None:
+        order_id = self._submit_partial_close(trade, requested_qty, stage, key)
+        state["pending_stage"] = stage
+        state["pending_order_id"] = order_id
+        state["pending_expected_qty"] = str(expected_remaining_qty)
+
+    def _resolve_pending_partial_exit(
+        self,
+        *,
+        trade,
+        state: dict,
+        entry: Decimal,
+        risk: Decimal,
+    ) -> str | None:
+        stage = state.get("pending_stage")
+        if stage not in {"tp1", "tp2"}:
+            return None
+        expected_remaining = Decimal(str(state.get("pending_expected_qty") or "0"))
+        current_qty = Decimal(str(trade.qty))
+        if current_qty > expected_remaining:
+            return "pending"
+        if stage == "tp1":
+            self._tighten_stop(trade, entry)
+            state["tp1_done"] = True
+            state["last_stop"] = float(entry)
+        else:
+            tp1_price = (
+                entry + risk * Decimal("1.5")
+                if trade.direction == Direction.BUY
+                else entry - risk * Decimal("1.5")
+            )
+            self._tighten_stop(trade, tp1_price)
+            state["tp2_done"] = True
+            state["last_stop"] = float(tp1_price)
+        state.pop("pending_stage", None)
+        state.pop("pending_order_id", None)
+        state.pop("pending_expected_qty", None)
+        return stage
 
     @staticmethod
     def _profit_targets(trade) -> tuple[Decimal, Decimal]:
@@ -168,7 +230,7 @@ class TradeManagementService:
             return mode
         return TradingMode(str(mode))
 
-    def _submit_partial_close(self, trade, requested_qty: Decimal, stage: str, key: str) -> None:
+    def _submit_partial_close(self, trade, requested_qty: Decimal, stage: str, key: str) -> str:
         instrument = self._bybit_service.get_validated_symbol(trade.symbol)["instrument"]
         lot = instrument.get("lotSizeFilter", {})
         step = Decimal(str(lot.get("qtyStep") or "0"))
@@ -204,6 +266,7 @@ class TradeManagementService:
                 "order_id": order_id,
             },
         )
+        return str(order_id)
 
     def _tighten_stop(self, trade, proposed: Decimal) -> None:
         instrument = self._bybit_service.get_validated_symbol(trade.symbol)["instrument"]

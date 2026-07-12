@@ -146,6 +146,29 @@ class ExchangeReconciliationAuthorityTests(unittest.TestCase):
         )
         self.assertEqual(len(self.repository.journal), first_journal_count)
 
+    def test_imported_trade_mode_is_restored_from_history(self):
+        self.service.register_open_trade(
+            symbol="LABUSDT",
+            mode=TradingMode.SCALPING,
+            direction=Direction.BUY,
+            entry_price=0.929,
+            stop_loss=0.90,
+            take_profit=1.0,
+            timeframe=None,
+            qty="178",
+        )
+        self.service._active_trades.clear()
+
+        self.service.sync_with_exchange(FakeBybit())
+
+        lab_records = [
+            row
+            for row in self.service.get_closed_trades().data.closed_trades
+            if row.symbol == "LABUSDT"
+        ]
+        self.assertTrue(lab_records)
+        self.assertEqual({row.mode for row in lab_records}, {TradingMode.SCALPING})
+
 
 if __name__ == "__main__":
     unittest.main()
