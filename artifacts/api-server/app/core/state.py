@@ -22,13 +22,13 @@ from app.services.trade_service import TradeService
 
 persistence_repository = PersistenceRepository(get_app_config().database_url)
 challenge_persistence = ChallengePersistence(persistence_repository)
-challenge_service = ChallengeService(challenge_persistence)
 settings_service = SettingsService(repository=persistence_repository)
 system_service = SystemService(
     settings_service=settings_service,
     repository=persistence_repository,
 )
 bybit_service = ManagedBybitService()
+challenge_service = ChallengeService(challenge_persistence, bybit_service=bybit_service)
 strategy_service = ManagedStrategyService(bybit_service=bybit_service)
 signal_registry = SignalRegistry(repository=persistence_repository)
 scanner_service = ScannerService(

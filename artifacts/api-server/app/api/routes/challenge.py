@@ -70,6 +70,16 @@ def terminate_challenge(challenge_id: UUID) -> ApiResponse[dict]:
     return _action(challenge_id, challenge_service.terminate, "Challenge terminated successfully.")
 
 
+@router.post("/{challenge_id}/run-cycle")
+def run_challenge_cycle(challenge_id: UUID) -> ApiResponse[dict]:
+    return _action(challenge_id, challenge_service.run_cycle, "Challenge cycle executed successfully.")
+
+
+@router.post("/{challenge_id}/finalize-cycle")
+def finalize_challenge_cycle(challenge_id: UUID) -> ApiResponse[dict]:
+    return _action(challenge_id, challenge_service.finalize_cycle, "Challenge cycle finalized successfully.")
+
+
 def _action(challenge_id: UUID, action, message: str) -> ApiResponse[dict]:
     try:
         snapshot = action(challenge_id)

@@ -511,7 +511,7 @@ TradeHawk V2 will be considered complete only when:
   Challenge DB save fail হলে success response দেওয়া যাবে না।
 - [x] `V2-029 - Challenge Readiness Check`
   `double_down_challenges` table ও challenge persistence `/health` readiness check-এর অংশ করতে হবে।
-- [ ] `V2-030 - Complete Challenge Execution Wiring`
+- [x] `V2-030 - Complete Challenge Execution Wiring`
   Cycle planning, strategy selection, demo order execution, protection, reconciliation ও P&L close API/service-এর সঙ্গে connect করতে হবে।
 - [x] `V2-031 - Multiple Challenge Management`
   Challenge list/selector এবং active challenge নির্বাচন ব্যবস্থা যোগ করতে হবে।

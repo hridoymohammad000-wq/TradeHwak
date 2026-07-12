@@ -25,6 +25,41 @@ type ChallengeSnapshot = {
     balance_after: string;
     created_at: string;
   }>;
+  runtime?: {
+    active_cycle?: {
+      cycle_number: number;
+      approved_slots: Array<{
+        symbol: string;
+        slot_key: string;
+        direction: string;
+        quantity: string;
+      }>;
+      execution_results: Array<{
+        slot_key: string;
+        symbol: string;
+        direction: string;
+        approved: boolean;
+        status: string;
+        rejection_code?: string | null;
+      }>;
+    } | null;
+    last_cycle?: {
+      status: string;
+      planned_at?: string;
+      selected_slots?: Array<{
+        symbol: string;
+        slot_type: string;
+        approved: boolean;
+        direction?: string | null;
+        rejection_code?: string | null;
+        size_rejection_code?: string | null;
+      }>;
+      finalization?: {
+        net_pnl: string;
+        status: string;
+      } | null;
+    } | null;
+  };
 };
 
 const money = (value: string | number) => `${Number(value).toFixed(2)} USDT`;
@@ -80,7 +115,7 @@ export default function DoubleDownChallenge() {
     }
   };
 
-  const action = async (name: 'start' | 'pause' | 'resume' | 'terminate') => {
+  const action = async (name: 'start' | 'pause' | 'resume' | 'terminate' | 'run-cycle' | 'finalize-cycle') => {
     if (!snapshot) return;
     setBusy(true);
     setError(null);
@@ -100,6 +135,8 @@ export default function DoubleDownChallenge() {
   const canStart = status === 'ready';
   const canPause = status === 'running' || status === 'recovery';
   const canResume = status === 'paused';
+  const canRunCycle = status === 'running' || status === 'recovery';
+  const canFinalizeCycle = status === 'cycle_active';
 
   return (
     <div className="min-h-full bg-slate-950 p-4 md:p-6 space-y-6">
@@ -137,6 +174,8 @@ export default function DoubleDownChallenge() {
               {canStart && <ActionButton label="Start" icon={Play} onClick={() => void action('start')} disabled={busy} />}
               {canPause && <ActionButton label="Pause" icon={Pause} onClick={() => void action('pause')} disabled={busy} />}
               {canResume && <ActionButton label="Resume" icon={Play} onClick={() => void action('resume')} disabled={busy} />}
+              {canRunCycle && <ActionButton label="Run Cycle" icon={Play} onClick={() => void action('run-cycle')} disabled={busy} />}
+              {canFinalizeCycle && <ActionButton label="Finalize Cycle" icon={RotateCcw} onClick={() => void action('finalize-cycle')} disabled={busy} />}
               {!['completed', 'failed', 'terminated'].includes(status) && (
                 <ActionButton label="Terminate" icon={RotateCcw} onClick={() => void action('terminate')} disabled={busy} secondary />
               )}
@@ -180,6 +219,48 @@ export default function DoubleDownChallenge() {
               <Metric label="Starting Balance" value={money(snapshot.config.starting_balance)} />
               <Metric label="Failure Floor" value={money(snapshot.config.failure_floor)} />
               <Metric label="Cycle Risk" value={`${Number(snapshot.config.cycle_risk_pct) * 100}%`} />
+            </div>
+          </section>
+
+          <section className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+              <h2 className="mb-4 font-bold text-white">Active Cycle</h2>
+              {!snapshot.runtime?.active_cycle ? (
+                <p className="text-sm text-slate-400">No active cycle is running.</p>
+              ) : (
+                <div className="space-y-3">
+                  <Metric label="Cycle Number" value={String(snapshot.runtime.active_cycle.cycle_number)} />
+                  {snapshot.runtime.active_cycle.approved_slots.map((slot) => (
+                    <div key={`${slot.slot_key}-${slot.symbol}`} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-200">
+                      <div className="font-mono text-white">{slot.symbol}</div>
+                      <div>{`${slot.slot_key} · ${slot.direction} · qty ${slot.quantity}`}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+              <h2 className="mb-4 font-bold text-white">Last Cycle</h2>
+              {!snapshot.runtime?.last_cycle ? (
+                <p className="text-sm text-slate-400">No cycle has been executed yet.</p>
+              ) : (
+                <div className="space-y-3 text-sm">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-slate-200">
+                    <div className="text-xs uppercase tracking-wider text-slate-500">Status</div>
+                    <div className="mt-1 font-mono text-white">{snapshot.runtime.last_cycle.status}</div>
+                    {snapshot.runtime.last_cycle.finalization && (
+                      <div className="mt-2 text-emerald-400">{`Net P&L ${money(snapshot.runtime.last_cycle.finalization.net_pnl)}`}</div>
+                    )}
+                  </div>
+                  {(snapshot.runtime.last_cycle.selected_slots || []).map((slot) => (
+                    <div key={`${slot.slot_type}-${slot.symbol}`} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-slate-200">
+                      <div className="font-mono text-white">{`${slot.slot_type} · ${slot.symbol}`}</div>
+                      <div>{slot.approved ? `approved ${slot.direction || ''}` : `rejected ${slot.rejection_code || slot.size_rejection_code || 'unknown'}`}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </section>
 
