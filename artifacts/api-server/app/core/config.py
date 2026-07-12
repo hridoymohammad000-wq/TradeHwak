@@ -28,7 +28,7 @@ def _load_local_env_file() -> None:
 _load_local_env_file()
 
 
-def _parse_cors_origins(*origin_values: str) -> list[str]:
+def _parse_cors_origins(*origin_values: str, include_local_origins: bool) -> list[str]:
     local_origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -41,7 +41,10 @@ def _parse_cors_origins(*origin_values: str) -> list[str]:
         for origin in value.split(",")
         if origin.strip()
     ]
-    return list(dict.fromkeys([*local_origins, *configured_origins]))
+    origins = [*configured_origins]
+    if include_local_origins:
+        origins = [*local_origins, *origins]
+    return list(dict.fromkeys(origins))
 
 
 def _read_port() -> int:
@@ -79,7 +82,12 @@ class AppConfig(BaseModel):
 
     @property
     def cors_origins(self) -> list[str]:
-        return _parse_cors_origins(self.frontend_url, self.cors_origins_env)
+        include_local_origins = self.app_env.strip().lower() != "production"
+        return _parse_cors_origins(
+            self.frontend_url,
+            self.cors_origins_env,
+            include_local_origins=include_local_origins,
+        )
 
 
 @lru_cache(maxsize=1)

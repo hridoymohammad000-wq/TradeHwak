@@ -13,6 +13,7 @@ class FakeRepository:
     def __init__(self, settings=None, workflow=None):
         self.settings = settings
         self.workflow = workflow
+        self.execution_ready = (True, None)
 
     def load_settings(self):
         return self.settings
@@ -25,6 +26,9 @@ class FakeRepository:
 
     def save_workflow_state(self, state):
         self.workflow = state
+
+    def verify_execution_ready(self):
+        return self.execution_ready
 
 
 class StepOneFoundationTests(unittest.TestCase):
@@ -75,13 +79,22 @@ class StepOneFoundationTests(unittest.TestCase):
     def test_health_execution_flag_uses_persisted_settings_readiness(self):
         service = SettingsService(repository=FakeRepository())
         service.update_settings(self._valid_settings_update())
-        health = SystemService(settings_service=service).get_health()
+        repository = FakeRepository()
+        health = SystemService(
+            settings_service=service,
+            repository=repository,
+        ).get_health()
 
         self.assertTrue(health.data.execution_enabled)
         self.assertEqual(health.data.phase, "operational")
+        self.assertTrue(health.data.persistence_ready)
+        self.assertIsNone(health.data.block_reason)
 
         service.update_settings(SettingsUpdate(auto_trade_enabled=False))
-        health = SystemService(settings_service=service).get_health()
+        health = SystemService(
+            settings_service=service,
+            repository=repository,
+        ).get_health()
         self.assertFalse(health.data.execution_enabled)
 
     def test_invalid_persisted_auto_trade_state_is_safely_disabled(self):
@@ -111,6 +124,22 @@ class StepOneFoundationTests(unittest.TestCase):
 
         self.assertFalse(service.get_settings_state().auto_trade_enabled)
         self.assertFalse(repository.settings["auto_trade_enabled"])
+
+    def test_health_is_degraded_when_persistence_is_not_ready(self):
+        repository = FakeRepository()
+        repository.execution_ready = (False, "DATABASE_URL is not configured.")
+        service = SettingsService(repository=repository)
+        health = SystemService(
+            settings_service=service,
+            repository=repository,
+        ).get_health()
+
+        self.assertEqual(health.data.status, "degraded")
+        self.assertFalse(health.data.persistence_ready)
+        self.assertEqual(
+            health.data.block_reason,
+            "DATABASE_URL is not configured.",
+        )
 
     def test_workflow_snapshot_restores_and_persists(self):
         repository = FakeRepository(

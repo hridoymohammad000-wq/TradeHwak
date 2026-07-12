@@ -8,6 +8,8 @@ class HealthData(BaseModel):
     app: str
     phase: str
     execution_enabled: bool
+    persistence_ready: bool | None = None
+    block_reason: str | None = None
 
 
 class HealthResponse(ApiResponse[HealthData]):
