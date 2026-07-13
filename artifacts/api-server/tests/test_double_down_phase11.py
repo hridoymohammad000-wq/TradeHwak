@@ -107,6 +107,7 @@ class DoubleDownPhase11Tests(unittest.TestCase):
             response = client.post(
                 "/api/challenge",
                 json={"starting_balance": 100, "failure_floor": 20},
+                headers={"Origin": "http://testserver"},
             )
 
         self.assertEqual(response.status_code, 503)

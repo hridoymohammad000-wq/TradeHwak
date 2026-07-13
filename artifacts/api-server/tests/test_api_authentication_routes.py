@@ -15,6 +15,10 @@ class ApiAuthenticationRouteTests(unittest.TestCase):
     async def _idle_background_loop():
         await asyncio.Event().wait()
 
+    def setUp(self):
+        auth._FAILED_LOGINS.clear()
+        auth._LOCKED_UNTIL.clear()
+
     def _client(self):
         stack = ExitStack()
         stack.enter_context(patch.object(main.persistence_repository, "initialize"))
@@ -55,6 +59,51 @@ class ApiAuthenticationRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["message"], "Authentication required.")
+
+    def test_login_requires_trusted_origin_for_mutation_requests(self):
+        client = self._client()
+
+        response = client.post("/auth/login", json={"access_token": "test-secret"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["message"],
+            "Origin validation failed for this mutation request.",
+        )
+
+    def test_login_accepts_same_origin_request(self):
+        client = self._client()
+
+        response = client.post(
+            "/auth/login",
+            json={"access_token": "test-secret"},
+            headers={"Origin": "http://testserver"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "Login successful.")
+
+    def test_login_rate_limits_repeated_failures(self):
+        client = self._client()
+        for _ in range(4):
+            response = client.post(
+                "/auth/login",
+                json={"access_token": "wrong-secret"},
+                headers={"Origin": "http://testserver"},
+            )
+            self.assertEqual(response.status_code, 401)
+
+        blocked = client.post(
+            "/auth/login",
+            json={"access_token": "wrong-secret"},
+            headers={"Origin": "http://testserver"},
+        )
+
+        self.assertEqual(blocked.status_code, 429)
+        self.assertEqual(
+            blocked.json()["message"],
+            "Too many failed login attempts. Try again later.",
+        )
 
 
 if __name__ == "__main__":

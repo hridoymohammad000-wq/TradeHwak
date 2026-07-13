@@ -3,16 +3,12 @@ services:
     name: crypto-bot-api
     runtime: python
     rootDir: artifacts/api-server
-    buildCommand: cd ../.. && npm install && VITE_API_BASE_URL=https://codex-crypto-bot-q3bx.onrender.com npm run build && cd artifacts/api-server && pip install -r requirements.txt
+    buildCommand: cd ../.. && npm install && npm run build && cd artifacts/api-server && pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: APP_ENV
         value: production
-      - key: FRONTEND_URL
-        value: https://codex-crypto-bot-q3bx.onrender.com
-      - key: CORS_ORIGINS
-        value: https://codex-crypto-bot-q3bx.onrender.com
       - key: TRADEHAWK_ACCESS_TOKEN
         sync: false
       - key: DATABASE_URL

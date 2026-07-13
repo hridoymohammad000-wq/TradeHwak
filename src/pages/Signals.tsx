@@ -18,7 +18,7 @@ export default function Signals() {
   const signals = useMemo(() => (signalsResponse?.signals ?? []).filter((signal) => {
     const symbolMatch = !search || signal.symbol.toLowerCase().includes(search.toLowerCase());
     const directionMatch = direction === 'all' || signal.direction === direction;
-    return signal.status === 'armed' && symbolMatch && directionMatch;
+    return (signal.status === 'armed' || signal.status === 'watching') && symbolMatch && directionMatch;
   }), [signalsResponse, search, direction]);
 
   const openChart = (symbol: string) => {
@@ -45,7 +45,7 @@ export default function Signals() {
       {signalsState === 'unauthorized' && <StatePanel title="Unauthorized" detail={signalsError} />}
       {signalsState === 'disconnected' && <StatePanel title="Backend disconnected or timed out" detail={signalsError} />}
       {signalsState === 'backend_error' && <StatePanel title="Backend error" detail={signalsError} />}
-      {(signalsState === 'empty' || (signalsState === 'ready' && signals.length === 0)) && <StatePanel title="No actionable backend signals" detail="Watching, queued, rejected, skipped, and failed candidates remain on the Scanner page." />}
+      {(signalsState === 'empty' || (signalsState === 'ready' && signals.length === 0)) && <StatePanel title="No backend signals ready to review" detail="Rejected, skipped, and failed candidates remain on the Scanner page." />}
 
       {signalsState === 'ready' && signals.length > 0 && <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">{signals.map((signal) => {
         const detail = signal as typeof signal & {

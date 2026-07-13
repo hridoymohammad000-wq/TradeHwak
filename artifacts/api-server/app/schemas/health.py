@@ -9,6 +9,9 @@ class HealthData(BaseModel):
     phase: str
     execution_enabled: bool
     persistence_ready: bool | None = None
+    bybit_ready: bool | None = None
+    workers_ready: bool | None = None
+    worker_status: dict[str, dict[str, bool | str | int | None]] = {}
     block_reason: str | None = None
 
 

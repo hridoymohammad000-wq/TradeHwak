@@ -15,19 +15,23 @@ from app.services.scanner_service import ScannerService
 from app.services.settings_service import SettingsService
 from app.services.signal_registry import SignalRegistry
 from app.services.signals_service import SignalsService
+from app.services.runtime_health_service import RuntimeHealthService
 from app.services.system_service import SystemService
 from app.services.trade_management_service import TradeManagementService
 from app.services.trade_service import TradeService
 
 
 persistence_repository = PersistenceRepository(get_app_config().database_url)
+runtime_health_service = RuntimeHealthService()
 challenge_persistence = ChallengePersistence(persistence_repository)
 settings_service = SettingsService(repository=persistence_repository)
+bybit_service = ManagedBybitService()
 system_service = SystemService(
     settings_service=settings_service,
     repository=persistence_repository,
+    bybit_service=bybit_service,
+    runtime_health_service=runtime_health_service,
 )
-bybit_service = ManagedBybitService()
 challenge_service = ChallengeService(challenge_persistence, bybit_service=bybit_service)
 strategy_service = ManagedStrategyService(bybit_service=bybit_service)
 signal_registry = SignalRegistry(repository=persistence_repository)

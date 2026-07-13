@@ -208,9 +208,9 @@ The bot must not start automatic trading unless:
 
 ### Status
 
-Completed on July 12, 2026.
+Completed on July 13, 2026.
 
-Automatic trading now checks PostgreSQL readiness before it can be enabled or run. The readiness gate verifies the database connection, required execution tables, settings access, trade state access, and executed signal history access.
+Automatic trading now checks PostgreSQL readiness before it can be enabled or run. The readiness gate verifies the database connection, required execution tables, settings access, trade state access, and executed signal history access, and startup restore now fails closed if settings, persisted trade state, or executed signal IDs cannot be loaded safely.
 
 ---
 
@@ -350,9 +350,9 @@ Exchange positions and closed orders must be matched using stable exchange ident
 
 ### Status
 
-Completed on July 12, 2026.
+Completed on July 13, 2026.
 
-Authoritative exchange reconciliation now lives directly inside the canonical `TradeService`. Open positions are treated as exchange-authoritative, closed orders are imported with stable exchange-derived identifiers, and repeated refreshes remain idempotent without relying on a runtime monkey patch.
+Authoritative exchange reconciliation now lives directly inside the canonical `TradeService`. Open positions are treated as exchange-authoritative, closed orders are imported with stable exchange-derived identifiers, open-position reconciliation now uses identity-first matching instead of symbol-only pairing, and repeated refreshes remain idempotent without relying on a runtime monkey patch.
 
 ---
 
@@ -409,12 +409,12 @@ TradeHawk V2 should be developed sequentially.
 
 ```text
 V2-001 — Backend API Authentication (Completed on July 12, 2026)
-V2-002 — Production Database Safety (Completed on July 12, 2026)
+V2-002 — Production Database Safety (Completed on July 13, 2026)
 V2-003 — Trading Rule Alignment (Completed on July 12, 2026)
 V2-004 — Independent Trade Management Worker (Completed on July 12, 2026)
 V2-005 — Position Sizing and Margin Validation (Completed on July 12, 2026)
 V2-006 — Distributed Lock and Idempotency (Completed on July 12, 2026)
-V2-007 — Exchange Reconciliation Rewrite (Completed on July 12, 2026)
+V2-007 — Exchange Reconciliation Rewrite (Completed on July 13, 2026)
 V2-008 — Scanner Error Reporting (Completed on July 12, 2026)
 V2-009 — Full Regression and Runtime Tests (Completed on July 13, 2026)
 V2-010 — Production Readiness Review (Completed on July 13, 2026)
@@ -424,7 +424,7 @@ V2-010 — Production Readiness Review (Completed on July 13, 2026)
 
 Completed on July 13, 2026.
 
-Verified with full backend regression (`146/146` tests passing), frontend validation (`npm run lint`), frontend production build (`npm run build`), and a live local backend runtime health check returning HTTP 200 from `/health`.
+Verified with full backend regression (`190/190` tests passing), frontend validation (`npm run lint`), frontend production build (`npm run build`), and a live local backend runtime health check returning HTTP 200 from `/health`. Backend CI requirements now also include the `httpx2` dependency required by current FastAPI/Starlette `TestClient` imports.
 
 ### V2-010 Production Readiness Review Summary
 
@@ -460,6 +460,17 @@ TradeHawk V2 will be considered complete only when:
 * Render deployment passes health and readiness checks
 * Bybit Demo execution is tested safely
 * No live-trading credentials or routes are enabled
+
+---
+
+## Recent Updates
+
+Updated on July 14, 2026.
+
+* Scanner now shows a pipeline summary for scanned, rejected, skipped, moved-to-signals, and remaining rows.
+* AI Signals now keeps both `armed` and Grade-A `watching` setups visible for review.
+* Closed-trade reconciliation now deduplicates repeated exchange-close rows so Journal, Dashboard, and Performance totals stay aligned.
+* Health/readiness, login hardening, and deployment portability changes are included in the current code and tests.
 
 ---
 
@@ -518,11 +529,11 @@ TradeHawk V2 will be considered complete only when:
 
 ### Production And Verification
 
-- [ ] `V2-032 - Real Health/Readiness Endpoint`
+- [x] `V2-032 - Real Health/Readiness Endpoint`
   Database/Bybit/worker/table failure হলে HTTP `503` দিতে হবে; শুধু body-তে `degraded` যথেষ্ট নয়।
-- [ ] `V2-033 - CSRF and Login Hardening`
+- [x] `V2-033 - CSRF and Login Hardening`
   Mutation routes-এ CSRF/origin validation, login rate limit ও failed-attempt protection যোগ করতে হবে।
-- [ ] `V2-034 - Deployment Portability`
+- [x] `V2-034 - Deployment Portability`
   Hardcoded Render URL সরিয়ে environment-based configuration করতে হবে।
 - [ ] `V2-035 - Migration Versioning`
   একক `001_init.sql` বদলে versioned migrations ও migration history যোগ করতে হবে।

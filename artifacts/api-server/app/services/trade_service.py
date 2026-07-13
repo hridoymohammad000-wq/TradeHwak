@@ -52,6 +52,7 @@ class TradeService:
         self._repository = repository
         self._active_trades: list[ManagedTrade] = []
         self._closed_trades: list[ClosedTradeRecord] = []
+        self._closed_trade_storage_keys: dict[str, str] = {}
         self._executed_signal_ids: set[str] = set()
         self._trade_day = trading_date()
         self._daily_trade_count = 0
@@ -80,13 +81,29 @@ class TradeService:
                     "Stored active trade state is invalid; startup restore aborted."
                 ) from exc
         self._closed_trades = []
+        self._closed_trade_storage_keys = {}
+        deduped_closed: dict[str, ClosedTradeRecord] = {}
+        deduped_storage_keys: dict[str, str] = {}
+        closed_order: list[str] = []
         for payload in closed_rows:
             try:
-                self._closed_trades.append(ClosedTradeRecord.model_validate(payload))
+                record = ClosedTradeRecord.model_validate(payload)
             except ValueError as exc:
                 raise RuntimeError(
                     "Stored closed trade state is invalid; startup restore aborted."
                 ) from exc
+            closed_key = self._closed_record_key(record)
+            existing = deduped_closed.get(closed_key)
+            if existing is None:
+                deduped_closed[closed_key] = record
+                deduped_storage_keys[closed_key] = (
+                    record.external_id or closed_key
+                )
+                closed_order.append(closed_key)
+                continue
+            deduped_closed[closed_key] = self._prefer_closed_record(existing, record)
+        self._closed_trades = [deduped_closed[key] for key in reversed(closed_order)]
+        self._closed_trade_storage_keys = deduped_storage_keys
         self._executed_signal_ids = self._repository.load_executed_signal_ids(
             self._trade_day
         )
@@ -607,17 +624,17 @@ class TradeService:
         )
 
     def _closed_record_exists(self, candidate: ClosedTradeRecord) -> bool:
-        return any(
+        return self._find_closed_record_index(candidate) is not None
+
+    def _find_closed_record_index(self, candidate: ClosedTradeRecord) -> int | None:
+        candidate_key = self._closed_record_key(candidate)
+        return next(
             (
-                candidate.external_id is not None
-                and record.external_id == candidate.external_id
-            )
-            or (
-                record.symbol == candidate.symbol
-                and record.closed_time == candidate.closed_time
-                and record.realized_pnl == candidate.realized_pnl
-            )
-            for record in self._closed_trades
+                index
+                for index, record in enumerate(self._closed_trades)
+                if self._closed_record_key(record) == candidate_key
+            ),
+            None,
         )
 
     def _persist_closed_trade(
@@ -625,13 +642,27 @@ class TradeService:
         trade_key: str,
         closed_record: ClosedTradeRecord,
     ) -> None:
-        if not self._closed_record_exists(closed_record):
+        closed_key = self._closed_record_key(closed_record)
+        existing_index = self._find_closed_record_index(closed_record)
+        stored_record = closed_record
+        if existing_index is None:
             self._closed_trades.insert(0, closed_record)
+        else:
+            stored_record = self._prefer_closed_record(
+                self._closed_trades[existing_index],
+                closed_record,
+            )
+            self._closed_trades[existing_index] = stored_record
         if self._repository is None:
             return
-        closed_payload = closed_record.model_dump(mode="json")
-        self._repository.upsert_trade(trade_key, "closed", closed_payload)
-        self._repository.save_journal_entry(trade_key, closed_payload)
+        storage_key = self._closed_trade_storage_keys.get(closed_key, trade_key)
+        closed_payload = stored_record.model_dump(mode="json")
+        self._repository.upsert_trade(storage_key, "closed", closed_payload)
+        self._repository.save_journal_entry(storage_key, closed_payload)
+        self._closed_trade_storage_keys[closed_key] = storage_key
+        if storage_key != trade_key:
+            self._repository.delete_trade(trade_key)
+            self._repository.delete_journal_entry(trade_key)
 
     @staticmethod
     def _closed_trade_key(row: dict) -> str:
@@ -642,6 +673,46 @@ class TradeService:
         pnl = str(row.get("closedPnl") or "0")
         side = str(row.get("side") or "unknown").lower()
         return f"exchange-closed:{order_id or f'{symbol}:{side}:{position_idx}:{updated}:{pnl}'}"
+
+    @staticmethod
+    def _closed_record_key(record: ClosedTradeRecord) -> str:
+        if record.external_id:
+            return str(record.external_id)
+        return (
+            f"closed:{record.symbol}:{record.direction.value}:"
+            f"{record.closed_time}:{record.realized_pnl}"
+        )
+
+    @staticmethod
+    def _closed_record_richness(record: ClosedTradeRecord) -> int:
+        score = 0
+        for value in (
+            record.qty,
+            record.stop_loss,
+            record.take_profit,
+            record.notional,
+            record.planned_risk_usdt,
+            record.risk_reward,
+            record.close_reason,
+            record.exit_analysis,
+            record.timeframe,
+            record.opened_at,
+        ):
+            if value not in (None, "", 0.0):
+                score += 1
+        return score
+
+    @classmethod
+    def _prefer_closed_record(
+        cls,
+        current: ClosedTradeRecord,
+        candidate: ClosedTradeRecord,
+    ) -> ClosedTradeRecord:
+        return (
+            candidate
+            if cls._closed_record_richness(candidate) >= cls._closed_record_richness(current)
+            else current
+        )
 
     def _managed_from_closed_row(
         self,

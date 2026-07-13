@@ -17,6 +17,7 @@ from app.core.state import (
     bybit_service,
     persistence_repository,
     profit_tracking_service,
+    runtime_health_service,
     settings_service,
     trade_management_service,
     trade_service,
@@ -31,6 +32,19 @@ EXCHANGE_RECONCILIATION_WORKER_LOCK = "tradehawk:worker:exchange_reconciliation"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_DIST = REPOSITORY_ROOT / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+
+runtime_health_service.register_worker(
+    "auto_trade",
+    interval_seconds=SCANNER_INTERVAL_SECONDS,
+)
+runtime_health_service.register_worker(
+    "trade_management",
+    interval_seconds=TRADE_MANAGEMENT_INTERVAL_SECONDS,
+)
+runtime_health_service.register_worker(
+    "exchange_reconciliation",
+    interval_seconds=EXCHANGE_RECONCILIATION_INTERVAL_SECONDS,
+)
 
 
 def _run_with_worker_leader_lock(lock_name: str, operation):
@@ -54,6 +68,10 @@ def _run_with_worker_leader_lock(lock_name: str, operation):
         unlocker(lock_name)
 
 
+def _worker_health_name(event_type: str) -> str:
+    return event_type.removesuffix("_cycle")
+
+
 async def _run_logged_worker(
     *,
     event_type: str,
@@ -62,6 +80,8 @@ async def _run_logged_worker(
     operation,
     sleep_seconds: int,
 ) -> None:
+    worker_name = _worker_health_name(event_type)
+    runtime_health_service.mark_started(worker_name)
     while True:
         try:
             result = await asyncio.to_thread(
@@ -70,7 +90,9 @@ async def _run_logged_worker(
                 operation,
             )
             persistence_repository.append_log("execution_logs", event_type, result)
+            runtime_health_service.mark_success(worker_name)
         except Exception as exc:
+            runtime_health_service.mark_failure(worker_name, str(exc))
             persistence_repository.append_log(
                 "execution_logs",
                 failure_event_type,

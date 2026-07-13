@@ -200,6 +200,34 @@ class TradingEngineBatchTests(unittest.TestCase):
         self.assertIn("1784001234567", signal_id)
         self.assertTrue(signal_id.endswith(str(__import__("app.core.trading_clock", fromlist=["trading_date"]).trading_date().isoformat())))
 
+    def test_signals_service_keeps_watching_grade_a_signals_visible(self):
+        registry = FakeSignalRegistry()
+        registry.get = lambda mode: [
+            StrategySignal(
+                symbol="ETHUSDT",
+                mode=TradingMode.SCALPING,
+                timeframe=Timeframe.M5,
+                direction=Direction.BUY,
+                grade=SignalGrade.A,
+                status="watching",
+                entry_price=100.0,
+                current_price=100.0,
+                reason="grade-a setup",
+                metrics={"final_score": 87.0, "atr14": 1.0, "swing_low": 98.0, "higher_timeframe_score": 4.0, "setup_timestamp": 1784001234000},
+            )
+        ]
+        service = SignalsService(
+            settings_service=FakeSettings(),
+            strategy_service=RankedStrategyService(),
+            signal_registry=registry,
+        )
+
+        response = service.get_signals(TradingMode.SCALPING, None, None, None)
+
+        self.assertEqual(len(response.data.signals), 1)
+        self.assertEqual(response.data.signals[0].status, "watching")
+        self.assertEqual(response.data.signals[0].grade.value, "A")
+
     def test_signal_id_changes_for_different_setup_timestamps(self):
         first = TradeService.build_signal_id(
             symbol="BTCUSDT",

@@ -37,7 +37,7 @@ class SignalsService:
 
         signals: list[SignalItem] = []
         for signal_item in evaluated:
-            if signal_item.status != "armed":
+            if signal_item.status not in {"armed", "watching"}:
                 continue
             if signal_item.grade not in settings_state.allowed_signal_grades:
                 continue

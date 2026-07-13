@@ -32,6 +32,25 @@ function candidateReason(item: ScannerResult): string {
   return item.failure_reason || item.rejection_reason || item.reason || 'No additional backend reason.';
 }
 
+function pipelineStats(panel: ModePanelState) {
+  const counts = panel.data?.counts;
+  const scanned = counts?.total ?? 0;
+  const rejected = counts?.rejected ?? 0;
+  const skipped = counts?.skipped ?? 0;
+  const failed = counts?.failed ?? 0;
+  const sentToSignals = panel.movedSignals;
+  const remainingOnScanner = panel.data?.results.length ?? 0;
+
+  return {
+    scanned,
+    rejected,
+    skipped,
+    failed,
+    sentToSignals,
+    remainingOnScanner,
+  };
+}
+
 function CandidateTable({ rows, mode }: { rows: ScannerResult[]; mode: TradingMode }) {
   if (rows.length === 0) {
     return (
@@ -101,6 +120,7 @@ function ScannerPanel({
     () => (panel.data?.results ?? []).filter((item) => item.outcome !== 'actionable'),
     [panel.data],
   );
+  const pipeline = useMemo(() => pipelineStats(panel), [panel]);
 
   const counts = useMemo(() => rows.reduce((acc, item) => {
     acc.total += 1;
@@ -129,6 +149,30 @@ function ScannerPanel({
           {panel.state === 'loading' ? 'Scanning' : `Run ${mode === 'scalping' ? 'Scalping' : 'Intraday'}`}
         </button>
       </div>
+
+      {panel.state !== 'idle' && panel.state !== 'error' && (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Scanner Pipeline</div>
+          <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-5">
+            {[
+              ['Scanned', pipeline.scanned, 'text-cyan-300'],
+              ['Rejected', pipeline.rejected, 'text-rose-300'],
+              ['Skipped', pipeline.skipped, 'text-amber-300'],
+              ['Sent To Signals', pipeline.sentToSignals, 'text-emerald-300'],
+              ['Still On Scanner', pipeline.remainingOnScanner, 'text-white'],
+            ].map(([label, value, tone]) => (
+              <div key={String(label)} className="rounded-lg border border-slate-800 bg-slate-900/80 p-3">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
+                <div className={`mt-1 text-xl font-black ${tone}`}>{value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 text-xs text-slate-500">
+            Failed: <span className="font-bold text-red-300">{pipeline.failed}</span> ·
+            Scanner table only keeps rejected, skipped, and failed rows after actionable setups move to AI Signals.
+          </div>
+        </div>
+      )}
 
       <div className="my-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         {[

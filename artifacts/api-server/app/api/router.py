@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Depends
 
-from app.api.routes.auth import require_authenticated_session, router as auth_router
+from app.api.routes.auth import (
+    require_authenticated_session,
+    require_trusted_browser_origin,
+    router as auth_router,
+)
 from app.api.routes.bybit import router as bybit_router
 from app.api.routes.challenge import router as challenge_router
 from app.api.routes.chart_context import router as chart_context_router
@@ -19,7 +23,12 @@ api_router = APIRouter()
 api_router.include_router(auth_router)
 api_router.include_router(health_router)
 
-protected_api_router = APIRouter(dependencies=[Depends(require_authenticated_session)])
+protected_api_router = APIRouter(
+    dependencies=[
+        Depends(require_authenticated_session),
+        Depends(require_trusted_browser_origin),
+    ]
+)
 protected_api_router.include_router(mode_router)
 protected_api_router.include_router(bybit_router)
 protected_api_router.include_router(dashboard_router)

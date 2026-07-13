@@ -126,6 +126,18 @@ class PersistenceRepository:
             ON CONFLICT (trade_key) DO UPDATE SET payload = EXCLUDED.payload
         """, (trade_key, self._json(payload)))
 
+    def delete_trade(self, trade_key: str) -> None:
+        self._execute_required(
+            "DELETE FROM trade_history WHERE trade_key = %s",
+            (trade_key,),
+        )
+
+    def delete_journal_entry(self, trade_key: str) -> None:
+        self._execute_required(
+            "DELETE FROM journal WHERE trade_key = %s",
+            (trade_key,),
+        )
+
     def load_executed_signal_ids(self, trade_day: date) -> set[str]:
         rows = self._fetchall_required(
             "SELECT signal_id FROM executed_signal_ids WHERE trade_day = %s",

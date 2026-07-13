@@ -18,11 +18,27 @@ class MemoryRepository:
     def save_settings(self, settings):
         self.settings = settings
 
+    def load_trade_state(self):
+        active = []
+        closed = []
+        for status, payload in self.trades.values():
+            if status == "closed":
+                closed.append(payload)
+            else:
+                active.append(payload)
+        return active, closed
+
     def upsert_trade(self, trade_key, status, payload):
         self.trades[trade_key] = (status, payload)
 
     def save_journal_entry(self, trade_key, payload):
         self.journal[trade_key] = payload
+
+    def delete_trade(self, trade_key):
+        self.trades.pop(trade_key, None)
+
+    def delete_journal_entry(self, trade_key):
+        self.journal.pop(trade_key, None)
 
     def load_executed_signal_ids(self, trade_day):
         return set(self.signal_ids)
@@ -210,6 +226,49 @@ class ExchangeReconciliationAuthorityTests(unittest.TestCase):
         imported = active.intraday_trades + active.scalping_trades
         self.assertEqual(len(imported), 1)
         self.assertEqual(imported[0].direction, Direction.SELL)
+
+    def test_duplicate_closed_rows_are_deduped_and_richer_record_wins(self):
+        imported_only = {
+            "symbol": "LABUSDT",
+            "mode": "intraday",
+            "direction": "sell",
+            "external_id": "exchange-closed:lab-close-1",
+            "qty": "297",
+            "entry_price": 0.929,
+            "exit_price": 0.844,
+            "stop_loss": 0.0,
+            "take_profit": 0.0,
+            "notional": 275.913,
+            "planned_risk_usdt": None,
+            "realized_pnl": 24.6922,
+            "risk_reward": None,
+            "result": "win",
+            "status": "closed_on_exchange",
+            "close_reason": "profit_exit",
+            "exit_analysis": "Imported exchange close.",
+            "timeframe": None,
+            "opened_at": "2026-07-10T10:00:00+00:00",
+            "closed_time": "2026-07-10T10:16:40+00:00",
+        }
+        richer = {
+            **imported_only,
+            "stop_loss": 0.90,
+            "take_profit": 1.0,
+            "planned_risk_usdt": 8.72,
+            "risk_reward": 2.0,
+            "timeframe": "M5",
+            "exit_analysis": "Tracked managed trade close.",
+        }
+        self.repository.trades["exchange-closed:lab-close-1"] = ("closed", imported_only)
+        self.repository.trades["local-lab-open"] = ("closed", richer)
+
+        self.service.reload_from_persistence()
+
+        closed = self.service.get_closed_trades().data.closed_trades
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0].symbol, "LABUSDT")
+        self.assertEqual(closed[0].risk_reward, 2.0)
+        self.assertEqual(closed[0].timeframe.value, "M5")
 
 
 if __name__ == "__main__":
