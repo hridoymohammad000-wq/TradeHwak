@@ -510,6 +510,7 @@ class BybitService:
         validated = self._validate_symbol(symbol)
         requested_limit = max(1, min(int(limit), 1000))
         interval_ms = int(interval) * 60_000
+        fetch_limit = min(requested_limit + 2, 1000)
         data = self._public_get(
             "/v5/market/kline",
             parse.urlencode(
@@ -517,7 +518,7 @@ class BybitService:
                     "category": "linear",
                     "symbol": validated["symbol"],
                     "interval": interval,
-                    "limit": requested_limit,
+                    "limit": fetch_limit,
                 }
             ),
         )
