@@ -137,6 +137,7 @@ export default function DoubleDownChallenge() {
   const canResume = status === 'paused';
   const canRunCycle = status === 'running' || status === 'recovery';
   const canFinalizeCycle = status === 'cycle_active';
+  const statusSummary = snapshot ? describeChallengeStatus(snapshot) : null;
 
   return (
     <div className="min-h-full bg-slate-950 p-4 md:p-6 space-y-6">
@@ -222,6 +223,17 @@ export default function DoubleDownChallenge() {
             </div>
           </section>
 
+          {statusSummary && (
+            <section className="rounded-2xl border border-sky-500/20 bg-slate-900 p-5">
+              <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-sky-400">Runtime status</div>
+              <h2 className="mt-3 text-xl font-black text-white">{statusSummary.title}</h2>
+              <p className="mt-2 text-sm text-slate-300">{statusSummary.description}</p>
+              {statusSummary.detail && (
+                <p className="mt-3 text-xs font-mono text-slate-400">{statusSummary.detail}</p>
+              )}
+            </section>
+          )}
+
           <section className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
               <h2 className="mb-4 font-bold text-white">Active Cycle</h2>
@@ -289,4 +301,65 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function ActionButton({ label, icon: Icon, onClick, disabled, secondary = false }: { label: string; icon: React.ComponentType<{ className?: string }>; onClick: () => void; disabled: boolean; secondary?: boolean }) {
   return <button type="button" disabled={disabled} onClick={onClick} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-black disabled:opacity-50 ${secondary ? 'border border-slate-700 bg-slate-950 text-slate-200' : 'bg-amber-400 text-slate-950'}`}><Icon className="h-4 w-4" />{label}</button>;
+}
+
+function describeChallengeStatus(snapshot: ChallengeSnapshot): { title: string; description: string; detail?: string } {
+  const activeCycle = snapshot.runtime?.active_cycle;
+  const lastCycle = snapshot.runtime?.last_cycle;
+  const selectedSlots = lastCycle?.selected_slots || [];
+  const rejectedSlots = selectedSlots.filter((slot) => !slot.approved);
+
+  if (snapshot.state.status === 'cycle_active' && activeCycle) {
+    return {
+      title: 'Cycle is active',
+      description: 'The challenge executed trades successfully and is waiting for trade management or manual finalization.',
+      detail: `${activeCycle.approved_slots.length} active slot(s), ${activeCycle.execution_results.length} execution result(s).`,
+    };
+  }
+
+  if (lastCycle?.status === 'no_approved_slots') {
+    const codes = rejectedSlots
+      .map((slot) => slot.rejection_code || slot.size_rejection_code || 'unknown')
+      .filter(Boolean)
+      .join(', ');
+    return {
+      title: 'Cycle ran but no trade was opened',
+      description: 'The strategy checked the selected markets, but current conditions did not pass the approval rules.',
+      detail: codes ? `Latest rejection codes: ${codes}` : undefined,
+    };
+  }
+
+  if (lastCycle?.status === 'no_executable_positions') {
+    return {
+      title: 'Signals were found but sizing blocked execution',
+      description: 'The cycle reached the sizing stage, but no position passed the final risk and exchange checks.',
+    };
+  }
+
+  if (lastCycle?.finalization) {
+    return {
+      title: 'Cycle completed',
+      description: 'A cycle was opened and then finalized successfully.',
+      detail: `Final status: ${lastCycle.finalization.status}. Net P&L: ${money(lastCycle.finalization.net_pnl)}.`,
+    };
+  }
+
+  if (snapshot.state.status === 'running' || snapshot.state.status === 'recovery') {
+    return {
+      title: 'Challenge is ready to run',
+      description: 'The challenge is active. Use Run Cycle to scan the selected markets and attempt a trade cycle.',
+    };
+  }
+
+  if (snapshot.state.status === 'ready') {
+    return {
+      title: 'Challenge is ready to start',
+      description: 'The challenge has been created successfully. Start it to enable cycle execution.',
+    };
+  }
+
+  return {
+    title: 'Challenge status available',
+    description: `Current state: ${snapshot.state.status}.`,
+  };
 }
