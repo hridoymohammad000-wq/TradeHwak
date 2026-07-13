@@ -91,7 +91,7 @@ class PersistenceRepository:
             return False, self.last_error
 
     def load_settings(self) -> dict[str, Any] | None:
-        row = self._fetchone("SELECT settings FROM bot_settings WHERE id = 1")
+        row = self._fetchone_required("SELECT settings FROM bot_settings WHERE id = 1")
         return self._json_value(row.get("settings")) if row else None
 
     def save_settings(self, settings: dict[str, Any]) -> None:
@@ -102,7 +102,9 @@ class PersistenceRepository:
         """, (self._json(settings),))
 
     def load_trade_state(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        rows = self._fetchall("SELECT payload, status FROM trade_history ORDER BY created_at ASC")
+        rows = self._fetchall_required(
+            "SELECT payload, status FROM trade_history ORDER BY created_at ASC"
+        )
         active, closed = [], []
         for row in rows:
             payload = self._json_value(row.get("payload")) or {}
@@ -125,7 +127,10 @@ class PersistenceRepository:
         """, (trade_key, self._json(payload)))
 
     def load_executed_signal_ids(self, trade_day: date) -> set[str]:
-        rows = self._fetchall("SELECT signal_id FROM executed_signal_ids WHERE trade_day = %s", (trade_day,))
+        rows = self._fetchall_required(
+            "SELECT signal_id FROM executed_signal_ids WHERE trade_day = %s",
+            (trade_day,),
+        )
         return {str(row["signal_id"]) for row in rows}
 
     def save_executed_signal_id(self, signal_id: str, trade_day: date) -> None:
@@ -312,6 +317,23 @@ class PersistenceRepository:
             self._handle_error("Database read failed", exc)
             return None
 
+    def _fetchone_required(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+    ) -> dict[str, Any] | None:
+        if not self.enabled:
+            reason = self.last_error or "Database persistence is disabled."
+            raise RuntimeError(reason)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(sql, params).fetchone()
+            self.last_error = None
+            return row
+        except Exception as exc:
+            self._handle_error("Database read failed", exc)
+            raise RuntimeError(self.last_error) from exc
+
     def _fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
@@ -323,6 +345,23 @@ class PersistenceRepository:
         except Exception as exc:
             self._handle_error("Database read failed", exc)
             return []
+
+    def _fetchall_required(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+    ) -> list[dict[str, Any]]:
+        if not self.enabled:
+            reason = self.last_error or "Database persistence is disabled."
+            raise RuntimeError(reason)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(sql, params).fetchall()
+            self.last_error = None
+            return list(rows)
+        except Exception as exc:
+            self._handle_error("Database read failed", exc)
+            raise RuntimeError(self.last_error) from exc
 
     def _handle_error(self, prefix: str, exc: Exception) -> None:
         self.last_error = f"{prefix}: {exc}"

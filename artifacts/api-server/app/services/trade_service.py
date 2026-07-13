@@ -75,14 +75,18 @@ class TradeService:
                         }
                     )
                 )
-            except (KeyError, TypeError, ValueError):
-                continue
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Stored active trade state is invalid; startup restore aborted."
+                ) from exc
         self._closed_trades = []
         for payload in closed_rows:
             try:
                 self._closed_trades.append(ClosedTradeRecord.model_validate(payload))
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Stored closed trade state is invalid; startup restore aborted."
+                ) from exc
         self._executed_signal_ids = self._repository.load_executed_signal_ids(
             self._trade_day
         )
@@ -105,6 +109,12 @@ class TradeService:
             or trade.signal_id
             or f"{trade.symbol}:{trade.mode.value}:{trade.opened_at or 'unknown'}"
         ]
+        candidates.append(
+            TradeService._trade_position_slot_key(
+                symbol=trade.symbol,
+                direction=trade.direction,
+            )
+        )
         if trade.order_id:
             candidates.append(trade.order_id)
         if trade.signal_id:
@@ -207,6 +217,7 @@ class TradeService:
             current = self._active_trades[existing_index]
             trade_record.signal_id = signal_id or current.signal_id
             trade_record.order_id = order_id or current.order_id
+            trade_record.exchange_position_id = current.exchange_position_id
             trade_record.qty = qty or current.qty
             trade_record.notional = notional or current.notional
             trade_record.planned_risk_usdt = (
@@ -236,10 +247,14 @@ class TradeService:
         except HTTPException:
             return
 
-        positions_by_symbol = {
-            str(item.get("symbol") or "").upper(): item
+        open_positions = [
+            item
             for item in positions
             if self._position_is_open(item)
+        ]
+        positions_by_key = {
+            self._position_slot_key(item): item
+            for item in open_positions
         }
         closed_by_symbol: dict[str, list[dict]] = defaultdict(list)
         for item in closed_pnls:
@@ -254,15 +269,21 @@ class TradeService:
 
         selected_mode = self._settings_service.get_settings_state().active_strategy_mode
         remaining_active: list[ManagedTrade] = []
-        tracked_symbols: set[str] = set()
+        tracked_position_keys: set[str] = set()
         consumed_closed_keys: set[str] = set()
         for trade in self._active_trades:
             symbol = trade.symbol.upper()
-            position = positions_by_symbol.get(symbol)
+            match = self._find_matching_open_position(
+                trade=trade,
+                positions_by_key=positions_by_key,
+                consumed_position_keys=tracked_position_keys,
+            )
+            position_key, position = match if match is not None else (None, None)
             if position:
                 self._apply_position_snapshot(trade, position)
                 remaining_active.append(trade)
-                tracked_symbols.add(symbol)
+                if position_key is not None:
+                    tracked_position_keys.add(position_key)
                 self._persist_active_trade(trade)
                 continue
 
@@ -278,8 +299,8 @@ class TradeService:
                 self._persist_closed_trade(self._trade_key(trade), closed_record)
                 continue
 
-        for symbol, position in positions_by_symbol.items():
-            if symbol in tracked_symbols:
+        for position_key, position in positions_by_key.items():
+            if position_key in tracked_position_keys:
                 continue
             imported = self._from_exchange_position(position, selected_mode)
             remaining_active.append(imported)
@@ -443,7 +464,47 @@ class TradeService:
         )
         trade.qty = str(position.get("size") or trade.qty or "") or None
         trade.status = "open"
+        trade.exchange_position_id = self._position_slot_key(position)
         trade.synced_with_exchange = True
+
+    def _find_matching_open_position(
+        self,
+        *,
+        trade: ManagedTrade,
+        positions_by_key: dict[str, dict],
+        consumed_position_keys: set[str],
+    ) -> tuple[str, dict] | None:
+        identity_candidates = set(self._trade_identity_candidates(trade))
+        for position_key, position in positions_by_key.items():
+            if position_key in consumed_position_keys:
+                continue
+            if identity_candidates.intersection(self._position_identity_candidates(position)):
+                return position_key, position
+
+        scored: list[tuple[int, str, dict]] = []
+        for position_key, position in positions_by_key.items():
+            if position_key in consumed_position_keys:
+                continue
+            if self._direction_from_position(position) != trade.direction:
+                continue
+            score = 0
+            if str(position.get("symbol") or "").upper() == trade.symbol.upper():
+                score += 4
+            score += 4
+            try:
+                if trade.qty and float(position.get("size") or 0) == float(trade.qty):
+                    score += 2
+            except (TypeError, ValueError):
+                pass
+            if abs(
+                self._safe_float(position.get("avgPrice"), trade.entry_price)
+                - trade.entry_price
+            ) <= max(abs(trade.entry_price) * 0.002, 0.0005):
+                score += 2
+            scored.append((score, position_key, position))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return (scored[0][1], scored[0][2]) if scored and scored[0][0] >= 8 else None
 
     def _from_exchange_position(
         self,
@@ -501,7 +562,7 @@ class TradeService:
             planned_risk_usdt=planned_risk,
             risk_reward=risk_reward,
             exchange_position_id=position_identity,
-            order_id=position_identity,
+            order_id=str(position.get("orderId") or "").strip() or None,
             opened_at=opened_at,
             synced_with_exchange=True,
         )
@@ -699,12 +760,48 @@ class TradeService:
 
     @staticmethod
     def _position_identity(position: dict) -> str:
+        explicit = str(
+            position.get("positionId")
+            or position.get("positionID")
+            or position.get("id")
+            or ""
+        ).strip()
+        if explicit:
+            return f"exchange-open:{explicit}"
+        return TradeService._position_slot_key(position)
+
+    @staticmethod
+    def _position_slot_key(position: dict) -> str:
         symbol = str(position.get("symbol") or "UNKNOWN").upper()
+        side = str(position.get("side") or "unknown").lower()
         position_idx = str(position.get("positionIdx") or "0").strip()
-        opened_at = TradeService._to_iso_time(
-            position.get("createdTime") or position.get("updatedTime")
-        ) or "open"
-        return f"exchange-open:{symbol}:{position_idx}:{opened_at}"
+        return f"exchange-open-slot:{symbol}:{side}:{position_idx}"
+
+    @staticmethod
+    def _trade_position_slot_key(
+        *,
+        symbol: str,
+        direction: Direction,
+        position_idx: str = "0",
+    ) -> str:
+        side = "buy" if direction == Direction.BUY else "sell"
+        return f"exchange-open-slot:{str(symbol or 'UNKNOWN').upper()}:{side}:{position_idx}"
+
+    @staticmethod
+    def _position_identity_candidates(position: dict) -> set[str]:
+        candidates = {
+            TradeService._position_identity(position),
+            TradeService._position_slot_key(position),
+        }
+        order_id = str(position.get("orderId") or "").strip()
+        if order_id:
+            candidates.add(order_id)
+        return {candidate for candidate in candidates if candidate}
+
+    @staticmethod
+    def _direction_from_position(position: dict) -> Direction:
+        side = str(position.get("side") or "").lower()
+        return Direction.BUY if side == "buy" else Direction.SELL
 
     @staticmethod
     def _direction_from_closed_row(row: dict) -> Direction:

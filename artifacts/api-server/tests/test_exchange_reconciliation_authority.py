@@ -76,6 +76,27 @@ class FakeBybit:
         ]
 
 
+class OppositeSideBybit:
+    def get_open_positions(self):
+        return [
+            {
+                "symbol": "BTCUSDT",
+                "side": "Sell",
+                "positionIdx": 0,
+                "size": "0.010",
+                "avgPrice": "65000",
+                "markPrice": "64950",
+                "stopLoss": "65200",
+                "takeProfit": "64500",
+                "createdTime": "1783750000000",
+                "updatedTime": "1783751000000",
+            }
+        ]
+
+    def get_closed_pnls(self, limit=100):
+        return []
+
+
 class ExchangeReconciliationAuthorityTests(unittest.TestCase):
     def setUp(self):
         self.repository = MemoryRepository()
@@ -168,6 +189,27 @@ class ExchangeReconciliationAuthorityTests(unittest.TestCase):
         ]
         self.assertTrue(lab_records)
         self.assertEqual({row.mode for row in lab_records}, {TradingMode.SCALPING})
+
+    def test_open_position_matching_does_not_use_symbol_only(self):
+        self.service.register_open_trade(
+            symbol="BTCUSDT",
+            mode=TradingMode.SCALPING,
+            direction=Direction.BUY,
+            entry_price=65010.0,
+            stop_loss=64800.0,
+            take_profit=65400.0,
+            timeframe=None,
+            order_id="btc-long-open",
+            qty="0.010",
+        )
+
+        self.service.sync_with_exchange(OppositeSideBybit())
+
+        active = self.service.get_active_trades().data
+        self.assertEqual(active.today_summary.total_open_trades, 1)
+        imported = active.intraday_trades + active.scalping_trades
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(imported[0].direction, Direction.SELL)
 
 
 if __name__ == "__main__":
