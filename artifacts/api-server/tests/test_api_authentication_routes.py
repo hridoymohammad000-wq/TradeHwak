@@ -22,6 +22,9 @@ class ApiAuthenticationRouteTests(unittest.TestCase):
     def _client(self):
         stack = ExitStack()
         stack.enter_context(patch.object(main.persistence_repository, "initialize"))
+        stack.enter_context(
+            patch.object(main.persistence_repository, "verify_execution_ready", return_value=(True, None))
+        )
         stack.enter_context(patch.object(main.settings_service, "reload_from_persistence"))
         stack.enter_context(patch.object(main.trade_service, "reload_from_persistence"))
         stack.enter_context(patch.object(main.profit_tracking_service, "reload_from_persistence"))

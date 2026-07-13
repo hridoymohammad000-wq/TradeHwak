@@ -174,6 +174,7 @@ async def lifespan(_: FastAPI):
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
+        persistence_repository.close()
 
 
 config = get_app_config()

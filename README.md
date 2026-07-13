@@ -471,6 +471,7 @@ Updated on July 14, 2026.
 * AI Signals now keeps both `armed` and Grade-A `watching` setups visible for review.
 * Closed-trade reconciliation now deduplicates repeated exchange-close rows so Journal, Dashboard, and Performance totals stay aligned.
 * Health/readiness, login hardening, and deployment portability changes are included in the current code and tests.
+* Database startup now uses versioned migration history, connection pooling, and automatic log retention cleanup.
 
 ---
 
@@ -535,9 +536,9 @@ Updated on July 14, 2026.
   Mutation routes-এ CSRF/origin validation, login rate limit ও failed-attempt protection যোগ করতে হবে।
 - [x] `V2-034 - Deployment Portability`
   Hardcoded Render URL সরিয়ে environment-based configuration করতে হবে।
-- [ ] `V2-035 - Migration Versioning`
+- [x] `V2-035 - Migration Versioning`
   একক `001_init.sql` বদলে versioned migrations ও migration history যোগ করতে হবে।
-- [ ] `V2-036 - Database Pooling and Log Retention`
+- [x] `V2-036 - Database Pooling and Log Retention`
   PostgreSQL connection pool এবং execution-log cleanup/retention policy যোগ করতে হবে।
 - [ ] `V2-037 - Full Runtime Test Evidence`
   Real PostgreSQL integration, multi-worker collision, restart recovery, Bybit Demo smoke test এবং browser E2E test চালাতে হবে।

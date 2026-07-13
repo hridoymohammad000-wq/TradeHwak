@@ -21,7 +21,13 @@ from app.services.trade_management_service import TradeManagementService
 from app.services.trade_service import TradeService
 
 
-persistence_repository = PersistenceRepository(get_app_config().database_url)
+config = get_app_config()
+persistence_repository = PersistenceRepository(
+    config.database_url,
+    pool_min_size=config.database_pool_min_size,
+    pool_max_size=config.database_pool_max_size,
+    log_retention_days=config.log_retention_days,
+)
 runtime_health_service = RuntimeHealthService()
 challenge_persistence = ChallengePersistence(persistence_repository)
 settings_service = SettingsService(repository=persistence_repository)

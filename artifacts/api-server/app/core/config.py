@@ -66,6 +66,19 @@ def _read_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _read_int(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw_value = getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f'{name} must be a valid integer, received "{raw_value}".') from exc
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}.")
+    return value
+
+
 class AppConfig(BaseModel):
     app_name: str = "TradeHawk Backend"
     version: str = "0.3.0"
@@ -77,6 +90,9 @@ class AppConfig(BaseModel):
     frontend_url: str = "http://localhost:5173"
     cors_origins_env: str = ""
     database_url: str = ""
+    database_pool_min_size: int = 1
+    database_pool_max_size: int = 5
+    log_retention_days: int = 14
     default_system_mode: RuntimeMode = RuntimeMode.DEMO
     default_strategy_mode: TradingMode = TradingMode.SCALPING
 
@@ -103,6 +119,9 @@ def get_app_config() -> AppConfig:
         frontend_url=getenv("FRONTEND_URL", "http://localhost:5173"),
         cors_origins_env=getenv("CORS_ORIGINS", ""),
         database_url=getenv("DATABASE_URL", ""),
+        database_pool_min_size=_read_int("DATABASE_POOL_MIN_SIZE", 1, minimum=0),
+        database_pool_max_size=_read_int("DATABASE_POOL_MAX_SIZE", 5, minimum=1),
+        log_retention_days=_read_int("LOG_RETENTION_DAYS", 14, minimum=1),
         default_system_mode=RuntimeMode(getenv("DEFAULT_SYSTEM_MODE", "demo")),
         default_strategy_mode=TradingMode(
             getenv("DEFAULT_STRATEGY_MODE", "scalping")

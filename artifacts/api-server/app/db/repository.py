@@ -17,11 +17,17 @@ except ImportError:
     psycopg = None
     dict_row = None
 
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:
+    ConnectionPool = None
+
 
 class PersistenceRepository:
     """Small synchronous Postgres repository."""
 
     REQUIRED_EXECUTION_TABLES = (
+        "schema_migrations",
         "bot_settings",
         "trade_history",
         "executed_signal_ids",
@@ -31,22 +37,48 @@ class PersistenceRepository:
         "double_down_challenges",
     )
 
-    def __init__(self, database_url: str | None) -> None:
+    LOG_TABLES = ("scan_logs", "signal_logs", "execution_logs")
+
+    def __init__(
+        self,
+        database_url: str | None,
+        *,
+        pool_min_size: int = 1,
+        pool_max_size: int = 5,
+        log_retention_days: int = 14,
+    ) -> None:
         self.database_url = (database_url or "").strip()
         self.enabled = bool(self.database_url and psycopg is not None)
         self.last_error: str | None = None
         self._advisory_lock_connections: dict[str, Any] = {}
+        self._pool: Any | None = None
+        self._pool_min_size = max(0, int(pool_min_size))
+        self._pool_max_size = max(1, int(pool_max_size))
+        if self._pool_min_size > self._pool_max_size:
+            self._pool_min_size = self._pool_max_size
+        self.log_retention_days = max(1, int(log_retention_days))
         if self.database_url and psycopg is None:
             self.last_error = "DATABASE_URL is set but psycopg is not installed."
+            logger.warning(self.last_error)
+        if self.enabled and ConnectionPool is not None:
+            self._pool = ConnectionPool(
+                self.database_url,
+                min_size=self._pool_min_size,
+                max_size=self._pool_max_size,
+                kwargs={"row_factory": dict_row},
+                open=False,
+            )
+            self._pool.open(wait=False)
+        elif self.enabled and ConnectionPool is None:
+            self.last_error = "psycopg_pool is not installed; using direct database connections."
             logger.warning(self.last_error)
 
     def initialize(self) -> bool:
         if not self.enabled:
             return False
-        sql_path = Path(__file__).resolve().parents[2] / "migrations" / "001_init.sql"
         try:
-            with self._connect() as connection:
-                connection.execute(sql_path.read_text(encoding="utf-8"))
+            self._run_migrations()
+            self.cleanup_old_logs()
             self.last_error = None
             return True
         except Exception as exc:
@@ -62,7 +94,7 @@ class PersistenceRepository:
             return False, self.last_error or "Database persistence is disabled."
 
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 missing_tables = []
                 for table in self.REQUIRED_EXECUTION_TABLES:
                     row = connection.execute(
@@ -189,10 +221,25 @@ class PersistenceRepository:
         self._execute_required(sql, params)
 
     def append_log(self, table: str, event_type: str, payload: dict[str, Any]) -> None:
-        allowed = {"scan_logs", "signal_logs", "execution_logs"}
-        if table not in allowed:
+        if table not in self.LOG_TABLES:
             raise ValueError(f"Unsupported log table: {table}")
         self._execute(f"INSERT INTO {table} (event_type, payload) VALUES (%s, %s::jsonb)", (event_type, self._json(payload)))
+
+    def cleanup_old_logs(self) -> None:
+        if not self.enabled:
+            return
+        for table in self.LOG_TABLES:
+            self._execute_required(
+                f"DELETE FROM {table} WHERE created_at < now() - (%s * interval '1 day')",
+                (self.log_retention_days,),
+            )
+
+    def close(self) -> None:
+        for name in list(self._advisory_lock_connections):
+            self.advisory_unlock(name)
+        if self._pool is not None:
+            with suppress(Exception):
+                self._pool.close()
 
     @contextmanager
     def advisory_lock_session(self, name: str):
@@ -207,7 +254,7 @@ class PersistenceRepository:
         connection = None
         acquired = False
         try:
-            connection = self._connect()
+            connection = self._acquire_connection()
             row = connection.execute(
                 "SELECT pg_try_advisory_lock(%s) AS acquired",
                 (key,),
@@ -215,7 +262,7 @@ class PersistenceRepository:
             acquired = bool(row and row.get("acquired"))
             if not acquired:
                 with suppress(Exception):
-                    connection.close()
+                    self._release_connection(connection)
                 yield False
                 return
             self._advisory_lock_connections[name] = connection
@@ -223,8 +270,7 @@ class PersistenceRepository:
             yield True
         except Exception as exc:
             if connection is not None:
-                with suppress(Exception):
-                    connection.close()
+                self._release_connection(connection)
             self._handle_error("Advisory lock acquisition failed", exc)
             yield False
         finally:
@@ -239,8 +285,7 @@ class PersistenceRepository:
                 except Exception as exc:
                     self._handle_error("Advisory lock release failed", exc)
                 finally:
-                    with suppress(Exception):
-                        held.close()
+                    self._release_connection(held)
 
     def try_advisory_lock(self, name: str) -> bool:
         if not self.enabled:
@@ -250,7 +295,7 @@ class PersistenceRepository:
         key = self._advisory_lock_key(name)
         connection = None
         try:
-            connection = self._connect()
+            connection = self._acquire_connection()
             row = connection.execute(
                 "SELECT pg_try_advisory_lock(%s) AS acquired",
                 (key,),
@@ -260,12 +305,11 @@ class PersistenceRepository:
                 self._advisory_lock_connections[name] = connection
                 self.last_error = None
                 return True
-            connection.close()
+            self._release_connection(connection)
             return False
         except Exception as exc:
             if connection is not None:
-                with suppress(Exception):
-                    connection.close()
+                self._release_connection(connection)
             self._handle_error("Advisory lock acquisition failed", exc)
             return False
 
@@ -288,18 +332,75 @@ class PersistenceRepository:
             return False
         finally:
             with suppress(Exception):
-                connection.close()
+                self._release_connection(connection)
+
+    def _acquire_connection(self):
+        if not self.enabled or psycopg is None:
+            raise RuntimeError("Database persistence is disabled.")
+        if self._pool is not None:
+            return self._pool.getconn()
+        return self._connect()
 
     def _connect(self):
         if not self.enabled or psycopg is None:
             raise RuntimeError("Database persistence is disabled.")
         return psycopg.connect(self.database_url, row_factory=dict_row)
 
+    def _release_connection(self, connection) -> None:
+        with suppress(Exception):
+            if self._pool is not None:
+                self._pool.putconn(connection)
+            else:
+                connection.close()
+
+    @contextmanager
+    def _connection(self):
+        connection = self._acquire_connection()
+        try:
+            with connection:
+                yield connection
+        finally:
+            self._release_connection(connection)
+
+    def _run_migrations(self) -> None:
+        migrations_dir = Path(__file__).resolve().parents[2] / "migrations"
+        migration_files = sorted(migrations_dir.glob("*.sql"))
+        if not migration_files:
+            raise RuntimeError("No database migrations were found.")
+
+        with self._connection() as connection:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version text PRIMARY KEY,
+                    filename text NOT NULL,
+                    checksum integer NOT NULL,
+                    applied_at timestamptz NOT NULL DEFAULT now()
+                )
+            """)
+            applied_rows = connection.execute(
+                "SELECT version FROM schema_migrations"
+            ).fetchall()
+            applied = {str(row["version"]) for row in applied_rows}
+
+            for path in migration_files:
+                version = path.stem.split("_", 1)[0]
+                if version in applied:
+                    continue
+                sql = path.read_text(encoding="utf-8")
+                connection.execute(sql)
+                connection.execute(
+                    """
+                    INSERT INTO schema_migrations (version, filename, checksum)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (version, path.name, zlib.crc32(sql.encode("utf-8")) & 0x7FFFFFFF),
+                )
+
     def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         if not self.enabled:
             return
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 connection.execute(sql, params)
             self.last_error = None
         except Exception as exc:
@@ -310,7 +411,7 @@ class PersistenceRepository:
             reason = self.last_error or "Database persistence is disabled."
             raise RuntimeError(reason)
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 connection.execute(sql, params)
             self.last_error = None
         except Exception as exc:
@@ -321,7 +422,7 @@ class PersistenceRepository:
         if not self.enabled:
             return None
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 row = connection.execute(sql, params).fetchone()
             self.last_error = None
             return row
@@ -338,7 +439,7 @@ class PersistenceRepository:
             reason = self.last_error or "Database persistence is disabled."
             raise RuntimeError(reason)
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 row = connection.execute(sql, params).fetchone()
             self.last_error = None
             return row
@@ -350,7 +451,7 @@ class PersistenceRepository:
         if not self.enabled:
             return []
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 rows = connection.execute(sql, params).fetchall()
             self.last_error = None
             return list(rows)
@@ -367,7 +468,7 @@ class PersistenceRepository:
             reason = self.last_error or "Database persistence is disabled."
             raise RuntimeError(reason)
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 rows = connection.execute(sql, params).fetchall()
             self.last_error = None
             return list(rows)
