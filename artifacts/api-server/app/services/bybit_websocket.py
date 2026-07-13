@@ -27,6 +27,7 @@ class BybitWebSocketSnapshot:
 class BybitWebSocketManager:
     PUBLIC_TESTNET_URL = "wss://stream-testnet.bybit.com/v5/public/linear"
     PUBLIC_MAINNET_URL = "wss://stream.bybit.com/v5/public/linear"
+    PRIVATE_DEMO_URL = "wss://stream-demo.bybit.com/v5/private"
     PRIVATE_TESTNET_URL = "wss://stream-testnet.bybit.com/v5/private"
     PRIVATE_MAINNET_URL = "wss://stream.bybit.com/v5/private"
 
@@ -225,7 +226,7 @@ class BybitWebSocketManager:
 
     def _on_private_open(self, ws_client) -> None:
         api_key, api_secret = self._service.private_credentials()
-        expires = int((time.time() + 1) * 1000)
+        expires = int((time.time() + 20) * 1000)
         signature = hmac.new(
             api_secret.encode("utf-8"),
             f"GET/realtime{expires}".encode("utf-8"),
@@ -234,7 +235,15 @@ class BybitWebSocketManager:
         with self._lock:
             self._private_connected = True
             self._private_authenticated = False
-        ws_client.send(json.dumps({"op": "auth", "args": [api_key, expires, signature]}))
+        ws_client.send(
+            json.dumps(
+                {
+                    "req_id": "private-auth",
+                    "op": "auth",
+                    "args": [api_key, expires, signature],
+                }
+            )
+        )
 
     def _on_public_message(self, _ws_client, message: str) -> None:
         payload = self._decode(message)
@@ -356,18 +365,14 @@ class BybitWebSocketManager:
         return args
 
     def _public_url(self) -> str:
-        return (
-            self.PUBLIC_TESTNET_URL
-            if self._service.uses_testnet_streams()
-            else self.PUBLIC_MAINNET_URL
-        )
+        if self._service.uses_demo_streams():
+            return self.PUBLIC_TESTNET_URL
+        return self.PUBLIC_TESTNET_URL if self._service.uses_testnet_streams() else self.PUBLIC_MAINNET_URL
 
     def _private_url(self) -> str:
-        return (
-            self.PRIVATE_TESTNET_URL
-            if self._service.uses_testnet_streams()
-            else self.PRIVATE_MAINNET_URL
-        )
+        if self._service.uses_demo_streams():
+            return self.PRIVATE_DEMO_URL
+        return self.PRIVATE_TESTNET_URL if self._service.uses_testnet_streams() else self.PRIVATE_MAINNET_URL
 
     @staticmethod
     def _decode(message: str) -> dict[str, Any] | None:

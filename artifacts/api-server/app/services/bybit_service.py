@@ -302,7 +302,10 @@ class BybitService:
         self._websocket_manager.stop()
 
     def uses_testnet_streams(self) -> bool:
-        return "api-demo.bybit.com" in self._base_url() or "testnet" in self._base_url()
+        return "testnet" in self._base_url()
+
+    def uses_demo_streams(self) -> bool:
+        return "api-demo.bybit.com" in self._base_url()
 
     def has_private_credentials(self) -> bool:
         api_key = (os.environ.get("BYBIT_DEMO_API_KEY") or "").strip()

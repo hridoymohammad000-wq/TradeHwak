@@ -74,6 +74,20 @@ class StubBybitService(BybitService):
 
 
 class BybitWebSocketSupportTests(unittest.TestCase):
+    def test_demo_mode_uses_demo_private_and_testnet_public_hosts(self):
+        service = StubBybitService()
+
+        self.assertTrue(service.uses_demo_streams())
+        self.assertFalse(service.uses_testnet_streams())
+        self.assertEqual(
+            service._websocket_manager._public_url(),
+            "wss://stream-testnet.bybit.com/v5/public/linear",
+        )
+        self.assertEqual(
+            service._websocket_manager._private_url(),
+            "wss://stream-demo.bybit.com/v5/private",
+        )
+
     def test_market_snapshot_uses_websocket_cache_when_available(self):
         service = StubBybitService()
         manager = service._websocket_manager
