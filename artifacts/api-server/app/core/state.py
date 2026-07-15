@@ -21,6 +21,49 @@ from app.services.trade_management_service import TradeManagementService
 from app.services.trade_service import TradeService
 
 
+class SymbolSafeTradeService(TradeService):
+    """Trade service variant that refuses cross-symbol reconciliation fallback matches."""
+
+    def _find_matching_position(
+        self,
+        trade,
+        positions_by_key: dict[str, dict],
+        consumed_position_keys: set[str],
+    ) -> tuple[str, dict] | None:
+        identity_candidates = set(self._trade_identity_candidates(trade))
+        for position_key, position in positions_by_key.items():
+            if position_key in consumed_position_keys:
+                continue
+            if identity_candidates.intersection(self._position_identity_candidates(position)):
+                return position_key, position
+
+        scored: list[tuple[int, str, dict]] = []
+        for position_key, position in positions_by_key.items():
+            if position_key in consumed_position_keys:
+                continue
+            if str(position.get("symbol") or "").upper() != trade.symbol.upper():
+                continue
+            if self._direction_from_position(position) != trade.direction:
+                continue
+
+            # Symbol and direction are mandatory identity components for fallback matching.
+            score = 8
+            try:
+                if trade.qty and float(position.get("size") or 0) == float(trade.qty):
+                    score += 2
+            except (TypeError, ValueError):
+                pass
+            if abs(
+                self._safe_float(position.get("avgPrice"), trade.entry_price)
+                - trade.entry_price
+            ) <= max(abs(trade.entry_price) * 0.002, 0.0005):
+                score += 2
+            scored.append((score, position_key, position))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return (scored[0][1], scored[0][2]) if scored and scored[0][0] >= 8 else None
+
+
 config = get_app_config()
 persistence_repository = PersistenceRepository(
     config.database_url,
@@ -51,7 +94,7 @@ signals_service = SignalsService(
     strategy_service=strategy_service,
     signal_registry=signal_registry,
 )
-trade_service = TradeService(
+trade_service = SymbolSafeTradeService(
     settings_service=settings_service,
     repository=persistence_repository,
 )
