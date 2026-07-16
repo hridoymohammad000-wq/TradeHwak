@@ -20,16 +20,17 @@ def update_engine_controls(payload: EngineControlRequest) -> EngineControlRespon
 @router.post(
     "/bot/start",
     response_model=EngineControlResponse,
-    summary="Start full automatic trading flow",
+    summary="Start intraday automatic trading flow",
     description=(
-        "Enables both strategy engines and auto trade, then immediately runs "
-        "one scan-signal-risk-execution-management cycle."
+        "Keeps the scalping engine disabled, enables the intraday engine and "
+        "auto trade, then immediately runs one intraday scan-signal-risk-"
+        "execution-management cycle."
     ),
 )
 def start_bot() -> EngineControlResponse:
     response = engine_service.update_controls(
         EngineControlRequest(
-            scalping_engine_enabled=True,
+            scalping_engine_enabled=False,
             intraday_engine_enabled=True,
             auto_trade_enabled=True,
             emergency_stop=False,
