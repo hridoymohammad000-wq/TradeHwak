@@ -3,7 +3,7 @@ services:
     name: tradehawk-api
     runtime: python
     rootDir: artifacts/api-server
-    buildCommand: pip install -r requirements.txt
+    buildCommand: cd ../.. && VITE_API_BASE_URL=https://tradehawk-api.onrender.com npm install && npm run build && cd artifacts/api-server && pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -22,6 +22,4 @@ services:
       - key: BYBIT_BASE_URL
         value: https://api-demo.bybit.com
       - key: BYBIT_DEMO_API_KEY
-        sync: false
-      - key: BYBIT_DEMO_API_SECRET
         sync: false
