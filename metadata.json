@@ -1,8 +1,0 @@
-{
-  "name": "Remix: TradeHawk",
-  "description": "A premium, dark-themed cryptocurrency trading workspace and analysis terminal, featuring real-time scanners, signals, interactive chart workspaces, live position tracking, and an execution journal.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}
