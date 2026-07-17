@@ -1,1 +1,0 @@
-"""TradeHawk backend package."""
