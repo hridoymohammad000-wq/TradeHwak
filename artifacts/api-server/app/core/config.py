@@ -94,7 +94,7 @@ class AppConfig(BaseModel):
     database_pool_max_size: int = 5
     log_retention_days: int = 14
     default_system_mode: RuntimeMode = RuntimeMode.DEMO
-    default_strategy_mode: TradingMode = TradingMode.SCALPING
+    default_strategy_mode: TradingMode = TradingMode.INTRADAY
 
     @property
     def cors_origins(self) -> list[str]:
@@ -124,6 +124,6 @@ def get_app_config() -> AppConfig:
         log_retention_days=_read_int("LOG_RETENTION_DAYS", 14, minimum=1),
         default_system_mode=RuntimeMode(getenv("DEFAULT_SYSTEM_MODE", "demo")),
         default_strategy_mode=TradingMode(
-            getenv("DEFAULT_STRATEGY_MODE", "scalping")
+            getenv("DEFAULT_STRATEGY_MODE", "intraday")
         ),
     )

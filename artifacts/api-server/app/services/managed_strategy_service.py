@@ -1,5 +1,17 @@
+from typing import TypedDict
+
 from app.core.enums import Direction, Timeframe, TradingMode
 from app.services.strategy_service import Candle, StrategyEvaluation, StrategyService, StrategySignal
+
+
+class IntradayTrendContext(TypedDict):
+    direction: Direction
+    label: str
+    close: float
+    ema20: float
+    ema50: float
+    ema200: float
+    rsi: float
 
 
 class ManagedStrategyService(StrategyService):
@@ -13,6 +25,9 @@ class ManagedStrategyService(StrategyService):
         TradingMode.SCALPING: Timeframe.M1,
         TradingMode.INTRADAY: Timeframe.M5,
     }
+    _INTRADAY_TREND_TIMEFRAME = Timeframe.H1
+    _INTRADAY_SETUP_TIMEFRAME = Timeframe.M15
+    _INTRADAY_ENTRY_TIMEFRAME = Timeframe.M5
     _FALLBACK_SYMBOLS = {
         TradingMode.SCALPING: [
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
@@ -37,6 +52,15 @@ class ManagedStrategyService(StrategyService):
         symbol: str,
         mode: TradingMode,
         timeframe: Timeframe | None,
+    ) -> StrategyEvaluation:
+        if mode == TradingMode.INTRADAY:
+            return self._evaluate_intraday_pipeline(symbol)
+        return self._evaluate_managed_mode(symbol, mode)
+
+    def _evaluate_managed_mode(
+        self,
+        symbol: str,
+        mode: TradingMode,
     ) -> StrategyEvaluation:
         setup_timeframe = self.default_timeframe(mode)
         evaluation = super().evaluate_symbol_detailed(
@@ -82,6 +106,160 @@ class ManagedStrategyService(StrategyService):
                 detail="Closed-candle confirmation did not validate the setup.",
             )
 
+        self._apply_confirmation_metrics(
+            signal=signal,
+            confirmation=confirmation,
+            confirmation_timeframe=confirmation_timeframe,
+            matches=matches,
+            matched_names=matched_names,
+        )
+        return StrategyEvaluation(symbol=symbol, outcome="actionable", signal=signal)
+
+    def _evaluate_intraday_pipeline(self, symbol: str) -> StrategyEvaluation:
+        trend = self._intraday_trend_context(symbol)
+        if trend is None:
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="rejected",
+                detail="1H trend was sideways, incomplete, or not EMA/RSI aligned.",
+            )
+
+        setup_evaluation = super().evaluate_symbol_detailed(
+            symbol=symbol,
+            mode=TradingMode.INTRADAY,
+            timeframe=self._INTRADAY_SETUP_TIMEFRAME,
+        )
+        signal = setup_evaluation.signal
+        if signal is None:
+            return setup_evaluation
+        if signal.direction != trend["direction"]:
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="rejected",
+                detail="15M setup direction did not align with the 1H trend.",
+            )
+
+        setup_candles = self._load_candles(
+            symbol,
+            self._INTERVAL_MAP[self._INTRADAY_SETUP_TIMEFRAME],
+            240,
+        )
+        if len(setup_candles) < 60:
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="insufficient_data",
+                detail="15M setup candles were incomplete.",
+            )
+
+        matches = self._strategy_matches(setup_candles, signal.direction)
+        matched_names = [name for name, matched in matches.items() if matched]
+        if not matched_names:
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="rejected",
+                detail="15M setup did not match breakout, pure SMC, or hybrid rules.",
+            )
+
+        entry = self._confirmation_context(
+            symbol=symbol,
+            timeframe=self._INTRADAY_ENTRY_TIMEFRAME,
+            direction=signal.direction,
+        )
+        if entry is None:
+            return StrategyEvaluation(
+                symbol=symbol,
+                outcome="rejected",
+                detail="5M entry trigger was not ready on the latest closed candle.",
+            )
+
+        signal.timeframe = self._INTRADAY_ENTRY_TIMEFRAME
+        signal.entry_price = round(float(entry["close"]), 8)
+        signal.current_price = signal.entry_price
+        signal.metrics.update(
+            {
+                "trend_timeframe_minutes": 60.0,
+                "trend_close": round(float(trend["close"]), 8),
+                "trend_ema20": round(float(trend["ema20"]), 8),
+                "trend_ema50": round(float(trend["ema50"]), 8),
+                "trend_ema200": round(float(trend["ema200"]), 8),
+                "trend_rsi14": round(float(trend["rsi"]), 2),
+                "trend_direction": 1.0 if signal.direction == Direction.BUY else -1.0,
+                "setup_timeframe_minutes": 15.0,
+                "entry_timeframe_minutes": 5.0,
+            }
+        )
+        self._apply_confirmation_metrics(
+            signal=signal,
+            confirmation=entry,
+            confirmation_timeframe=self._INTRADAY_ENTRY_TIMEFRAME,
+            matches=matches,
+            matched_names=matched_names,
+        )
+        if entry.get("timestamp") not in (None, ""):
+            signal.metrics["setup_timestamp"] = float(entry["timestamp"])
+        signal.reason = (
+            f"1H {str(trend['label'])} trend aligned. "
+            f"15M setup matched: {', '.join(matched_names)}. "
+            f"5M entry confirmed: {entry['candle_label']}, "
+            f"RSI {float(entry['rsi']):.1f}, VWAP {float(entry['vwap']):.8f}."
+        )
+        return StrategyEvaluation(symbol=symbol, outcome="actionable", signal=signal)
+
+    def _intraday_trend_context(
+        self,
+        symbol: str,
+    ) -> IntradayTrendContext | None:
+        candles = self._load_candles(
+            symbol,
+            self._INTERVAL_MAP[self._INTRADAY_TREND_TIMEFRAME],
+            240,
+        )
+        return self._intraday_trend_context_from_candles(candles)
+
+    @classmethod
+    def _intraday_trend_context_from_candles(
+        cls,
+        candles: list[Candle],
+    ) -> IntradayTrendContext | None:
+        if len(candles) < 210:
+            return None
+        closes = [candle.close for candle in candles]
+        close = closes[-1]
+        ema20 = cls._ema(closes, 20)
+        ema50 = cls._ema(closes, 50)
+        ema200 = cls._ema(closes, 200)
+        rsi = cls._rsi(closes, 14)
+        if None in (ema20, ema50, ema200, rsi) or close <= 0:
+            return None
+
+        if close > ema20 > ema50 > ema200 and rsi >= 50.0:
+            direction = Direction.BUY
+            label = "bullish"
+        elif close < ema20 < ema50 < ema200 and rsi <= 50.0:
+            direction = Direction.SELL
+            label = "bearish"
+        else:
+            return None
+
+        return {
+            "direction": direction,
+            "label": label,
+            "close": close,
+            "ema20": ema20,
+            "ema50": ema50,
+            "ema200": ema200,
+            "rsi": rsi,
+        }
+
+    def _apply_confirmation_metrics(
+        self,
+        *,
+        signal: StrategySignal,
+        confirmation: dict[str, float | bool | str | int | None],
+        confirmation_timeframe: Timeframe,
+        matches: dict[str, bool],
+        matched_names: list[str],
+    ) -> None:
         signal.metrics.update(
             {
                 "confirmation_timeframe_minutes": float(
@@ -111,7 +289,6 @@ class ManagedStrategyService(StrategyService):
             f"{confirmation['candle_label']}, RSI {float(confirmation['rsi']):.1f}, "
             f"VWAP {float(confirmation['vwap']):.8f}."
         )
-        return StrategyEvaluation(symbol=symbol, outcome="actionable", signal=signal)
 
     def _strategy_matches(
         self,
@@ -210,7 +387,7 @@ class ManagedStrategyService(StrategyService):
         symbol: str,
         timeframe: Timeframe,
         direction: Direction,
-    ) -> dict[str, float | bool | str] | None:
+    ) -> dict[str, float | bool | str | int | None] | None:
         candles = self._load_candles(
             symbol,
             self._INTERVAL_MAP[timeframe],
@@ -254,6 +431,7 @@ class ManagedStrategyService(StrategyService):
             "rsi": rsi,
             "vwap": vwap,
             "close": latest.close,
+            "timestamp": latest.timestamp,
             "candle_label": candle_label,
             "candle_direction": candle_direction,
             "rsi_aligned": rsi_aligned,

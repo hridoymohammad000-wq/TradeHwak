@@ -365,8 +365,9 @@ class BybitWebSocketManager:
         return args
 
     def _public_url(self) -> str:
-        if self._service.uses_demo_streams():
-            return self.PUBLIC_TESTNET_URL
+        # Bybit Demo uses the mainnet public market-data stream and the
+        # dedicated Demo private stream. Only a true testnet account uses
+        # the testnet public host.
         return self.PUBLIC_TESTNET_URL if self._service.uses_testnet_streams() else self.PUBLIC_MAINNET_URL
 
     def _private_url(self) -> str:
@@ -383,9 +384,11 @@ class BybitWebSocketManager:
         return payload if isinstance(payload, dict) else None
 
     @staticmethod
-    def _best_price(levels: Any, *, fallback: Any) -> Any:
+    def _best_price(levels: Any, *, fallback: Any) -> str | None:
         if isinstance(levels, list) and levels:
             first = levels[0]
-            if isinstance(first, (list, tuple)) and first:
-                return first[0]
-        return fallback
+            if isinstance(first, list) and first:
+                return str(first[0])
+        if fallback is not None:
+            return str(fallback)
+        return None
