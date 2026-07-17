@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: crypto-bot-api
+    name: tradehawk-api
     runtime: python
     rootDir: artifacts/api-server
-    buildCommand: cd ../.. && npm install && npm run build && cd artifacts/api-server && pip install -r requirements.txt
+    buildCommand: cd ../.. && VITE_API_BASE_URL=https://tradehawk-api.onrender.com npm install && npm run build && cd artifacts/api-server && pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -16,12 +16,10 @@ services:
       - key: DEFAULT_SYSTEM_MODE
         value: demo
       - key: DEFAULT_STRATEGY_MODE
-        value: scalping
+        value: intraday
       - key: BYBIT_ENV
         value: demo
       - key: BYBIT_BASE_URL
         value: https://api-demo.bybit.com
       - key: BYBIT_DEMO_API_KEY
-        sync: false
-      - key: BYBIT_DEMO_API_SECRET
         sync: false
