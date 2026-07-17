@@ -1,0 +1,21 @@
+TradeHawk frontend root replacement package
+
+Use this ZIP after cloning hridoymohammad000-wq/TradeHwak.
+
+IMPORTANT:
+- Extract/copy these files into the repository root.
+- Replace existing frontend files/folders at root.
+- DO NOT delete or edit artifacts/api-server.
+- DO NOT delete render.yaml unless you intentionally update Render config separately.
+- Keep .env.example as-is: VITE_API_BASE_URL= blank for same-origin deployment.
+
+Recommended commands from repo root after extraction:
+
+npm ci
+npm run build
+git status
+git add .
+git commit -m "Replace frontend with uploaded TradeHawk Intraday Terminal design"
+git push origin <your-branch>
+
+Then create PR to main.

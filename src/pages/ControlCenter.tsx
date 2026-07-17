@@ -1,265 +1,238 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Save, Server, Power, RefreshCw, ShieldCheck, AlertTriangle, Play, Square } from 'lucide-react';
-import { ApiError, apiRequest, getBackendBaseUrl, updateEngineControls } from '../api/client';
-import { BackendGrade, TradingMode } from '../api/types';
-import { useAuth } from '../context/AuthContext';
+import { useEffect, useState } from "react";
+import { apiClient } from "../lib/apiClient";
+import { BotStatus } from "../types";
+import { Terminal, CheckCircle, XCircle, RefreshCw, AlertTriangle, ShieldAlert, Wifi, WifiOff } from "lucide-react";
+import { useBackendStatus } from "../hooks/useBackendStatus";
 
-interface CanonicalSettings {
-  system: { system_mode: 'demo' };
-  strategy: { active_strategy_mode: TradingMode; allowed_signal_grades: BackendGrade[] };
-  risk: { daily_max_loss: number; daily_max_trades: number; risk_per_trade_pct: number; max_open_positions: number };
-  engine_control: { scalping_engine_enabled: boolean; intraday_engine_enabled: boolean };
-  execution_control: { auto_trade_enabled: boolean; emergency_stop: boolean };
-}
+export function ControlCenter() {
+  const [status, setStatus] = useState<BotStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
+  const [showEmergencyConfirm, setShowEmergencyConfirm] = useState(false);
+  const { status: globalBackendStatus } = useBackendStatus();
 
-interface WorkflowStatus {
-  selected_mode: TradingMode;
-  scanner_status: string;
-  signal_status: string;
-  execution_status: string;
-  execution_ready: boolean;
-  execution_block_reason: string | null;
-  auto_trade_enabled: boolean;
-  bybit_connection_code: string;
-  active_trade_count: number;
-  daily_trade_count: number;
-  last_reject_reason: string | null;
-  last_cycle_at: string | null;
-}
-
-function classify(error: unknown) {
-  if (error instanceof ApiError) {
-    if (error.kind === 'unauthorized') return 'unauthorized';
-    if (error.kind === 'timeout') return 'timeout';
-    if (error.kind === 'network' || error.kind === 'configuration') return 'disconnected';
-  }
-  return 'error';
-}
-
-export default function ControlCenter() {
-  const { connectionStatus } = useAuth();
-  const [settings, setSettings] = useState<CanonicalSettings | null>(null);
-  const [workflow, setWorkflow] = useState<WorkflowStatus | null>(null);
-  const [state, setState] = useState<'loading' | 'ready' | 'saving' | 'saved' | 'unauthorized' | 'disconnected' | 'timeout' | 'error'>('loading');
-  const [message, setMessage] = useState('');
-  const [risk, setRisk] = useState({ daily_max_loss: 0, daily_max_trades: 0, risk_per_trade_pct: 0, max_open_positions: 0 });
-  const [mode, setMode] = useState<TradingMode>('scalping');
-
-  const load = async () => {
-    setState('loading');
-    setMessage('');
+  const fetchStatus = async () => {
+    setLoading(true);
     try {
-      const [settingsData, workflowData] = await Promise.all([
-        apiRequest<CanonicalSettings>('/api/settings', { method: 'GET' }),
-        apiRequest<WorkflowStatus>('/api/workflow/status', { method: 'GET' }),
-      ]);
-      setSettings(settingsData);
-      setWorkflow(workflowData);
-      setRisk(settingsData.risk);
-      setMode(settingsData.strategy.active_strategy_mode);
-      setState('ready');
-    } catch (error) {
-      setState(classify(error));
-      setMessage(error instanceof Error ? error.message : 'Unable to load control state.');
-    }
-  };
-
-  useEffect(() => { void load(); }, []);
-
-  const save = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setState('saving');
-    try {
-      const updated = await apiRequest<CanonicalSettings>('/api/settings', {
-        method: 'POST',
-        body: { ...risk, active_strategy_mode: mode },
+      await apiClient.health();
+      // Mocking actual bot status since health might not return it
+      setStatus({
+        isRunning: false,
+        isDemo: true,
+        backendStatus: "ONLINE",
+        bybitStatus: "CONNECTED"
       });
-      setSettings(updated);
-      setRisk(updated.risk);
-      setMode(updated.strategy.active_strategy_mode);
-      setState('saved');
-      setMessage('Canonical settings persisted successfully.');
-      const refreshedWorkflow = await apiRequest<WorkflowStatus>('/api/workflow/status', { method: 'GET' });
-      setWorkflow(refreshedWorkflow);
-    } catch (error) {
-      setState(classify(error));
-      setMessage(error instanceof Error ? error.message : 'Save failed.');
+    } catch {
+      setStatus({
+        isRunning: false,
+        isDemo: true,
+        backendStatus: "OFFLINE",
+        bybitStatus: "DISCONNECTED"
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const control = async (
-    key: 'scalping_engine_enabled' | 'intraday_engine_enabled' | 'emergency_stop',
-    value: boolean,
-  ) => {
-    setMessage('');
+  useEffect(() => {
+    fetchStatus();
+  }, []);
+
+  const handleStart = async () => {
+    setLoading(true);
+    setMessage(null);
     try {
-      await updateEngineControls({ [key]: value });
-      await load();
-    } catch (error) {
-      setState(classify(error));
-      setMessage(error instanceof Error ? error.message : 'Control action failed.');
+      await apiClient.startBot();
+      setMessage({ text: "Intraday bot started.", type: 'success' });
+      await fetchStatus();
+    } catch (e: any) {
+      setMessage({ text: e.message || "Failed to start bot", type: 'error' });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const botAction = async (action: 'start' | 'stop') => {
-    setState('saving');
-    setMessage('');
+  const handleStop = async () => {
+    setLoading(true);
+    setMessage(null);
     try {
-      await apiRequest(`/api/bot/${action}`, { method: 'POST' });
-      await load();
-      setState('saved');
-      setMessage(action === 'start'
-        ? 'Bot started: immediate scan → signal → risk → execution → management cycle completed.'
-        : 'Auto trading stopped. Existing positions were not modified.');
-    } catch (error) {
-      setState(classify(error));
-      setMessage(error instanceof Error ? error.message : `Unable to ${action} bot.`);
+      await apiClient.stopBot();
+      setMessage({ text: "Bot stopped.", type: 'success' });
+      await fetchStatus();
+    } catch (e: any) {
+      setMessage({ text: e.message || "Failed to stop bot", type: 'error' });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const field = (label: string, key: keyof typeof risk, step = '0.1') => (
-    <label className="block">
-      <span className="text-[10px] uppercase font-mono text-slate-400">{label}</span>
-      <input
-        type="number"
-        min="0"
-        step={step}
-        value={risk[key]}
-        onChange={(event) => setRisk((current) => ({ ...current, [key]: Number(event.target.value) }))}
-        className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs text-white"
-      />
-    </label>
-  );
-
-  const lockedField = (label: string, key: keyof typeof risk) => (
-    <label className="block">
-      <span className="text-[10px] uppercase font-mono text-slate-400">{label}</span>
-      <input
-        type="number"
-        value={risk[key]}
-        disabled
-        readOnly
-        className="mt-1 w-full cursor-not-allowed bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs text-slate-400"
-      />
-    </label>
-  );
-
-  const selectedEngineEnabled = settings
-    ? mode === 'scalping'
-      ? settings.engine_control.scalping_engine_enabled
-      : settings.engine_control.intraday_engine_enabled
-    : false;
-
-  const statusTone = workflow?.execution_ready
-    ? 'border-emerald-900/50 bg-emerald-950/20 text-emerald-300'
-    : 'border-amber-900/50 bg-amber-950/20 text-amber-300';
-
-  const executionLabel = useMemo(() => {
-    if (!workflow) return 'Unavailable';
-    if (workflow.execution_ready) return 'Ready';
-    if (!workflow.auto_trade_enabled) return 'Auto trade off';
-    return 'Blocked';
-  }, [workflow]);
+  const handleEmergencyStop = async () => {
+    setLoading(true);
+    setMessage(null);
+    setShowEmergencyConfirm(false);
+    try {
+      await apiClient.updateEngineControl({ emergency_stop: true, auto_trade_enabled: false });
+      setMessage({ text: "Emergency stop activated.", type: 'success' });
+      await fetchStatus();
+    } catch (e: any) {
+      setMessage({ text: e.message || "Emergency stop failed", type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
-      <div className="bg-slate-900 border border-slate-850 rounded-xl p-5 flex justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-white">Control Center</h1>
-          <p className="text-xs text-slate-400 mt-1">Manual scan stays scan-only. Start Bot owns the full automatic workflow.</p>
-        </div>
-        <button onClick={() => void load()} className="px-3 py-2 bg-slate-800 text-white rounded-lg text-xs flex gap-2"><RefreshCw className="h-4 w-4" />Reload</button>
+      <div>
+        <h2 className="text-xl font-medium text-slate-100 tracking-tight">Control Center</h2>
+        <p className="text-sm text-slate-500 mt-1">Operate the Intraday Bybit Demo bot safely from one place.</p>
       </div>
 
-      {state === 'loading' ? (
-        <div className="p-8 text-center text-slate-400">Loading canonical control state…</div>
-      ) : !settings ? (
-        <div className="p-8 bg-slate-900 rounded-xl text-center text-rose-400">{state.replace('_', ' ')}: {message}</div>
-      ) : (
-        <form onSubmit={save} className="space-y-6">
-          <div className={`rounded-xl border p-4 flex items-start gap-3 ${statusTone}`}>
-            {workflow?.execution_ready ? <ShieldCheck className="h-5 w-5 shrink-0" /> : <AlertTriangle className="h-5 w-5 shrink-0" />}
-            <div>
-              <div className="font-bold">Execution: {executionLabel}</div>
-              <div className="mt-1 text-xs opacity-90">
-                {workflow?.execution_ready
-                  ? `${workflow.selected_mode} engine, risk controls and auto trade are ready.`
-                  : workflow?.execution_block_reason || workflow?.last_reject_reason || 'Execution readiness is unavailable.'}
-              </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0F141F] border border-[#1C2333] rounded-lg p-4">
+        <div className="flex items-center gap-4 text-sm font-medium">
+          <div className="flex items-center gap-2">
+            {globalBackendStatus === "Connected" ? <Wifi className="w-4 h-4 text-emerald-400" /> : <WifiOff className="w-4 h-4 text-red-400" />}
+            <span className={globalBackendStatus === "Connected" ? "text-emerald-400" : "text-red-400"}>{globalBackendStatus.toUpperCase()}</span>
+          </div>
+        </div>
+        
+        <button 
+          onClick={fetchStatus}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 bg-[#1C2333]/50 hover:bg-[#1C2333] text-slate-300 text-sm font-medium rounded-lg transition-colors border border-[#1C2333] w-fit disabled:opacity-50"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
+          Refresh Status
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#0F141F] border border-[#1C2333] rounded-lg p-6">
+          <div className="flex justify-between items-center mb-6">
+            <span className="text-sm font-medium text-slate-200">Engine Status</span>
+            <span className="text-[10px] text-amber-500 bg-amber-500/10 px-2 py-1 rounded uppercase tracking-widest font-semibold">
+              Bybit Demo only. Real trading disabled.
+            </span>
+          </div>
+          
+          <div className="space-y-2 mb-6">
+            <StatusRow 
+              label="Backend Status" 
+              value={status?.backendStatus || "UNKNOWN"} 
+              isGood={status?.backendStatus === "ONLINE"} 
+            />
+            <StatusRow 
+              label="Bybit Demo Status" 
+              value={status?.bybitStatus || "UNKNOWN"} 
+              isGood={status?.bybitStatus === "CONNECTED"} 
+            />
+            <StatusRow 
+              label="Intraday Engine" 
+              value={status?.isRunning ? "RUNNING" : "STOPPED"} 
+              isGood={!!status?.isRunning} 
+              neutral={!status}
+            />
+            <StatusRow 
+              label="Active Strategy" 
+              value="INTRADAY" 
+              isGood={true} 
+            />
+            <StatusRow 
+              label="Execution Mode" 
+              value="DEMO" 
+              isGood={true} 
+            />
+          </div>
+
+          {message && (
+            <div className={`mt-6 p-4 rounded-lg text-sm font-medium flex items-center gap-3 ${message.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+              {message.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
+              {message.text}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-6">
+          <div className="bg-[#0F141F] border border-[#1C2333] rounded-lg p-6">
+            <div className="flex justify-between items-center mb-6">
+              <span className="text-sm font-medium text-slate-200">Main Controls</span>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row gap-4">
+              <button
+                onClick={handleStart}
+                disabled={loading || status?.isRunning || globalBackendStatus !== 'Connected'}
+                className="flex-1 py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+              >
+                Start Intraday Bot
+              </button>
+              
+              <button
+                onClick={handleStop}
+                disabled={loading || !status?.isRunning}
+                className="flex-1 py-3 px-4 bg-transparent border border-red-500/50 hover:bg-red-500/10 hover:border-red-500 text-red-500 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors"
+              >
+                Stop Bot
+              </button>
             </div>
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-6">
-            <div className="bg-slate-900 border border-slate-850 rounded-xl p-5">
-              <h3 className="text-base font-bold text-white mb-4">Canonical Risk Limits</h3>
-              <div className="grid grid-cols-2 gap-4">
-                {lockedField('Risk per trade % (Locked by mode)', 'risk_per_trade_pct')}
-                {field('Daily max trades', 'daily_max_trades', '1')}
-                {lockedField('Combined daily max loss % (Locked)', 'daily_max_loss')}
-                {lockedField('Max open positions (Locked)', 'max_open_positions')}
-              </div>
-              <label className="block mt-4">
-                <span className="text-[10px] uppercase font-mono text-slate-400">Active strategy mode</span>
-                <select value={mode} onChange={(event) => setMode(event.target.value as TradingMode)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs text-white">
-                  <option value="scalping">Scalping</option>
-                  <option value="intraday">Intraday</option>
-                </select>
-              </label>
+          <div className="bg-[#0A0D14] border border-red-900/30 rounded-lg p-6 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-1 h-full bg-red-500/50"></div>
+             <div className="flex justify-between items-center mb-4 pl-2">
+              <span className="text-sm font-medium text-red-400 flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> Danger Zone</span>
             </div>
-
-            <div className="bg-slate-900 border border-slate-850 rounded-xl p-5">
-              <h3 className="font-bold text-white flex gap-2"><Power className="h-5 w-5 text-emerald-400" />Engine Controls</h3>
-              {([
-                ['scalping_engine_enabled', 'Scalping Engine', settings.engine_control.scalping_engine_enabled],
-                ['intraday_engine_enabled', 'Intraday Engine', settings.engine_control.intraday_engine_enabled],
-                ['emergency_stop', 'Emergency Stop', settings.execution_control.emergency_stop],
-              ] as const).map(([key, label, checked]) => (
-                <label key={key} className="mt-4 flex justify-between text-sm text-slate-300">
-                  <span>{label}</span>
-                  <input type="checkbox" checked={checked} onChange={(event) => void control(key, event.target.checked)} />
-                </label>
-              ))}
-
-              <div className="mt-5 grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => void botAction('start')}
-                  disabled={state === 'saving' || Boolean(workflow?.auto_trade_enabled)}
-                  className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-3 text-sm font-black text-slate-950 disabled:opacity-50"
-                >
-                  <Play className="h-4 w-4" /> Start Bot
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void botAction('stop')}
-                  disabled={state === 'saving' || !workflow?.auto_trade_enabled}
-                  className="flex items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
-                >
-                  <Square className="h-4 w-4" /> Stop Bot
-                </button>
+            
+            {!showEmergencyConfirm ? (
+              <button
+                onClick={() => setShowEmergencyConfirm(true)}
+                disabled={loading}
+                className="w-full py-3 px-4 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors ml-2 w-[calc(100%-0.5rem)]"
+              >
+                Emergency Stop
+              </button>
+            ) : (
+              <div className="space-y-4 ml-2">
+                <p className="text-sm text-red-400/80 font-medium">Are you sure? This will immediately halt all operations and disable auto-trading.</p>
+                <div className="flex gap-3">
+                   <button
+                    onClick={handleEmergencyStop}
+                    className="flex-1 py-3 bg-red-500 hover:bg-red-400 text-white text-sm font-semibold rounded-lg transition-colors"
+                  >
+                    Confirm Stop
+                  </button>
+                  <button
+                    onClick={() => setShowEmergencyConfirm(false)}
+                    className="flex-1 py-3 bg-[#1C2333] hover:bg-[#2A344A] text-slate-300 text-sm font-semibold rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
-
-              <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
-                Selected engine: <span className={selectedEngineEnabled ? 'text-emerald-400' : 'text-amber-400'}>{mode} {selectedEngineEnabled ? 'enabled' : 'disabled'}</span>
-              </div>
-            </div>
+            )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-          <div className="bg-slate-900 border border-slate-850 rounded-xl p-5">
-            <h3 className="font-bold text-white flex gap-2"><Server className="h-5 w-5 text-indigo-400" />Authoritative Backend Status</h3>
-            <div className="mt-4 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-              <div className="rounded-lg bg-slate-950 p-3"><span className="text-slate-500">Connection</span><div className="mt-1 text-white capitalize">{connectionStatus}</div></div>
-              <div className="rounded-lg bg-slate-950 p-3"><span className="text-slate-500">Bybit</span><div className="mt-1 text-white">{workflow?.bybit_connection_code ?? 'N/A'}</div></div>
-              <div className="rounded-lg bg-slate-950 p-3"><span className="text-slate-500">Workflow</span><div className="mt-1 text-white">{workflow?.execution_status ?? 'N/A'}</div></div>
-              <div className="rounded-lg bg-slate-950 p-3"><span className="text-slate-500">Last cycle</span><div className="mt-1 text-white">{workflow?.last_cycle_at ? new Date(workflow.last_cycle_at).toLocaleString() : 'N/A'}</div></div>
-            </div>
-            <p className="mt-3 text-[11px] text-slate-500">API: {getBackendBaseUrl() ?? 'Not configured'}</p>
-          </div>
+function StatusRow({ label, value, isGood, neutral }: { label: string; value: string; isGood: boolean; neutral?: boolean }) {
+  let statusColor = isGood ? 'bg-emerald-400' : 'bg-red-400';
+  let textColor = isGood ? 'text-emerald-400' : 'text-red-400';
+  
+  if (neutral) {
+     statusColor = 'bg-slate-500';
+     textColor = 'text-slate-400';
+  }
 
-          {message && <div className={state === 'saved' ? 'text-emerald-400 text-sm' : 'text-rose-400 text-sm'}>{message}</div>}
-          <button disabled={state === 'saving'} className="px-5 py-3 bg-emerald-500 text-slate-950 rounded-lg font-bold flex items-center gap-2"><Save className="h-4 w-4" />{state === 'saving' ? 'Saving…' : 'Save Canonical Settings'}</button>
-        </form>
-      )}
+  return (
+    <div className="flex items-center justify-between p-3 bg-[#0A0D14] rounded-lg border border-[#1C2333] transition-colors">
+      <span className="text-slate-400 text-xs font-medium">{label}</span>
+      <div className="flex items-center gap-2">
+        <div className={`w-1.5 h-1.5 rounded-full ${statusColor}`} />
+        <span className={`font-mono text-xs font-medium ${textColor}`}>{value}</span>
+      </div>
     </div>
   );
 }

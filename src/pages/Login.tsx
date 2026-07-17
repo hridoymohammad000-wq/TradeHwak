@@ -1,81 +1,82 @@
-import React, { FormEvent, useState } from 'react';
-import { KeyRound, LoaderCircle, ShieldCheck, Zap } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import { getBackendStatusPresentation } from '../lib/backendStatus';
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Lock } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
+import { ApiError } from "../lib/apiClient";
 
-export default function Login() {
-  const { authState, connectionStatus, errorMessage, login } = useAuth();
-  const [accessToken, setAccessToken] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const status = getBackendStatusPresentation(connectionStatus);
+export function Login() {
+  const [tokenInput, setTokenInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
+  const navigate = useNavigate();
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    setSubmitting(true);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const accessToken = tokenInput.trim();
+    if (!accessToken) return;
+
+    setError(null);
+    setLoading(true);
     try {
       await login(accessToken);
+      navigate("/");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.message);
+      } else {
+        setError("Login failed. Check the backend URL and access token.");
+      }
     } finally {
-      setAccessToken('');
-      setSubmitting(false);
+      setLoading(false);
     }
   };
 
-  const busy = submitting || authState === 'checking';
-
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-5 font-sans selection:bg-emerald-500 selection:text-slate-950">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
-        <div className="p-6 border-b border-slate-800 bg-slate-950/40">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-500 rounded-lg flex items-center justify-center shadow-sm shadow-emerald-500/20">
-              <Zap className="h-6 w-6 text-slate-950 fill-slate-950" />
-            </div>
-            <div>
-              <h1 className="text-lg font-extrabold tracking-wider text-white">TRADEHAWK</h1>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-mono font-bold">Private Terminal Access</p>
-            </div>
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 font-sans">
+      <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded p-8 shadow-2xl flex flex-col items-center">
+        <div className="flex flex-col items-center mb-8 w-full">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-6 h-6 bg-emerald-500 rounded-sm"></div>
+            <div className="font-bold text-sm tracking-wider uppercase text-slate-100">TradeHawk Intraday</div>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-500 mt-2">
+            <Lock className="w-3 h-3" />
+            Backend Cookie Session
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="w-full space-y-4">
           <div>
-            <label htmlFor="access-token" className="text-[11px] font-mono uppercase tracking-wider text-slate-400 font-bold block mb-2">
-              Access Token
+            <label htmlFor="token" className="block text-[10px] uppercase tracking-wider font-medium text-slate-500 mb-2 text-center">
+              Enter Access Token
             </label>
-            <div className="relative">
-              <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-              <input
-                id="access-token"
-                name="access-token"
-                type="password"
-                required
-                autoComplete="off"
-                value={accessToken}
-                onChange={(event) => setAccessToken(event.target.value)}
-                className="w-full bg-slate-950 text-sm font-mono text-white border border-slate-800 rounded-lg pl-10 pr-3 py-3 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
+            <input
+              type="password"
+              id="token"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-3 text-slate-200 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono text-center text-sm placeholder:text-slate-700"
+              placeholder="••••••••••••"
+              disabled={loading}
+              required
+            />
           </div>
+
+          {error && (
+            <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300 text-center">
+              {error}
+            </div>
+          )}
 
           <button
             type="submit"
-            disabled={busy || !accessToken.trim()}
-            className="w-full flex items-center justify-center gap-2 bg-emerald-400 hover:bg-emerald-300 disabled:bg-slate-700 disabled:text-slate-400 text-slate-950 font-extrabold px-5 py-3 rounded-lg transition-colors uppercase text-xs tracking-wider"
+            disabled={loading}
+            className="w-full p-3 bg-emerald-500 text-slate-950 text-[12px] font-bold uppercase tracking-wider rounded transition-opacity hover:opacity-90 disabled:opacity-50 mt-4"
           >
-            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-            Enter
+            {loading ? "Connecting..." : "Connect"}
           </button>
         </form>
-
-        <div className="px-6 pb-6">
-          <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-3 flex gap-3 items-start">
-            <span className={`mt-1 h-2.5 w-2.5 rounded-full shrink-0 ${status.dotClass}`} />
-            <div>
-              <p className={`text-xs font-bold ${status.textClass}`}>{status.label}</p>
-              <p className="text-[11px] text-slate-500 mt-1">{errorMessage || status.detail}</p>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );
