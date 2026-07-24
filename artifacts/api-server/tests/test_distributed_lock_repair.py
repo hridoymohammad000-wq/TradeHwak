@@ -34,6 +34,7 @@ class DistributedLockRepairTests(unittest.TestCase):
     def test_acquired_lock_connection_stays_open_until_unlock(self):
         repository = PersistenceRepository(database_url="postgres://example")
         repository.enabled = True
+        repository._pool = None
         connection = FakeConnection(acquired=True, released=True)
         repository._connect = lambda: connection
 
@@ -58,6 +59,7 @@ class DistributedLockRepairTests(unittest.TestCase):
     def test_failed_lock_attempt_closes_connection_immediately(self):
         repository = PersistenceRepository(database_url="postgres://example")
         repository.enabled = True
+        repository._pool = None
         connection = FakeConnection(acquired=False, released=False)
         repository._connect = lambda: connection
 

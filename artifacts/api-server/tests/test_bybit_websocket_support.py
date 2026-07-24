@@ -81,7 +81,7 @@ class BybitWebSocketSupportTests(unittest.TestCase):
         self.assertFalse(service.uses_testnet_streams())
         self.assertEqual(
             service._websocket_manager._public_url(),
-            "wss://stream-testnet.bybit.com/v5/public/linear",
+            "wss://stream.bybit.com/v5/public/linear",
         )
         self.assertEqual(
             service._websocket_manager._private_url(),
