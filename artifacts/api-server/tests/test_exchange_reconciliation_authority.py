@@ -195,6 +195,7 @@ class ExchangeReconciliationAuthorityTests(unittest.TestCase):
             qty="178",
         )
         self.service._active_trades.clear()
+        self.service.reload_from_persistence()
 
         self.service.sync_with_exchange(FakeBybit())
 

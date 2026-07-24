@@ -86,6 +86,7 @@ class StepTwoWorkflowTests(unittest.TestCase):
     def test_untracked_exchange_position_is_imported(self):
         repository = MemoryRepository()
         settings = SettingsService(repository=repository)
+        settings._settings.active_strategy_mode = TradingMode.SCALPING
         trades = TradeService(settings_service=settings, repository=repository)
 
         trades.sync_with_exchange(FakeBybitPositions())
